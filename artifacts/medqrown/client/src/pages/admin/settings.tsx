@@ -17,19 +17,23 @@ import { useToast } from "@/hooks/use-toast";
 import { AdminNav } from "@/components/admin/admin-nav";
 import { ArrowLeft, Brain, Mail, Users, Shield, Plus, Trash2, Save, Pencil, FlaskConical, CheckCircle, XCircle, Loader2, Building2, Calendar, CreditCard, FileText, Search } from "lucide-react";
 import { FEATURES } from "@/lib/feature-flags";
+import { cohortName, formatNairobi } from "@/lib/datetime";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { apiErrorMessage } from "@/lib/api-error";
 
 export default function AdminSettings() {
   const [, setLocation] = useLocation();
   const { toast } = useToast();
 
-  const { data: admin } = useQuery<any>({ queryKey: ["/api/admin/me"] });
+  const { data: admin, isLoading: adminLoading } = useQuery<any>({ queryKey: ["/api/admin/me"] });
   const { data: providers } = useQuery<any[]>({ queryKey: ["/api/ai-providers"] });
   const { data: templates } = useQuery<any[]>({ queryKey: ["/api/admin/settings/email-templates"] });
   const { data: admins } = useQuery<any[]>({ queryKey: ["/api/admins"] });
   const { data: universities } = useQuery<any[]>({ queryKey: ["/api/admin/universities"], enabled: FEATURES.universityManagement });
 
+  if (adminLoading) return null;
   if (!admin) {
-    setLocation("/admin");
+    setLocation("/");
     return null;
   }
 
@@ -92,7 +96,7 @@ function AiProvidersSection({ providers }: { providers: any[] }) {
       setTestResults(data.results || []);
       setShowTestDialog(true);
     } catch (e: any) {
-      toast({ title: "Test failed", description: e.message, variant: "destructive" });
+      toast({ title: "Test failed", description: apiErrorMessage(e), variant: "destructive" });
     } finally {
       setTesting(false);
     }
@@ -305,7 +309,7 @@ function EmailTemplatesSection({ templates }: { templates: any[] }) {
       setEditing(null);
       toast({ title: "Template updated" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" })
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" })
   });
 
   return (
@@ -403,6 +407,29 @@ function EmailLogSection() {
   });
 
   const { data: templates } = useQuery<any[]>({ queryKey: ["/api/admin/settings/email-templates"] });
+  const { toast } = useToast();
+  const [confirmDelete, setConfirmDelete] = useState<null | { id?: number; label: string }>(null);
+  const filterParams = () => {
+    const p = new URLSearchParams();
+    if (debouncedSearch) p.set("search", debouncedSearch);
+    if (status !== "all") p.set("status", status);
+    if (templateKey !== "all") p.set("templateKey", templateKey);
+    return p.toString();
+  };
+  const deleteLogs = useMutation({
+    mutationFn: async (target: { id?: number }) => {
+      const res = await apiRequest("DELETE", target.id ? `/api/admin/settings/email-log/${target.id}` : `/api/admin/settings/email-log?${filterParams()}`);
+      return res.json();
+    },
+    onSuccess: (data: any) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/admin/settings/email-log"] });
+      setConfirmDelete(null);
+      setPage(1);
+      toast({ title: `Deleted ${data.deleted} log entr${data.deleted === 1 ? "y" : "ies"}` });
+    },
+    onError: (e: any) => toast({ title: "Couldn't delete logs", description: apiErrorMessage(e), variant: "destructive" }),
+  });
+  const filtered = debouncedSearch || status !== "all" || templateKey !== "all";
 
   return (
     <div className="space-y-4">
@@ -411,6 +438,12 @@ function EmailLogSection() {
           <h3 className="font-medium">Email Log</h3>
           <p className="text-sm text-muted-foreground">View sent and failed emails across the system.</p>
         </div>
+        {data?.total > 0 && (
+          <Button variant="outline" size="sm" className="text-destructive"
+            onClick={() => setConfirmDelete({ label: filtered ? `all ${data.total} matching entries` : `all ${data.total} entries` })}>
+            <Trash2 className="w-4 h-4 mr-1" /> {filtered ? "Delete matching" : "Delete all"}
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3 bg-muted/30 p-3 rounded-lg border">
@@ -455,18 +488,19 @@ function EmailLogSection() {
                 <TableHead>Template / Source</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Details</TableHead>
+                <TableHead className="w-10"><span className="sr-only">Delete</span></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="text-center py-8"><Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" /></TableCell></TableRow>
               ) : data?.items?.length === 0 ? (
-                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No email logs found.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">No email logs found.</TableCell></TableRow>
               ) : (
                 data?.items?.map((item: any) => (
                   <TableRow key={item.id}>
                     <TableCell className="text-xs whitespace-nowrap text-muted-foreground">
-                      {new Date(item.createdAt).toLocaleString()}
+                      {formatNairobi(item.createdAt)}
                     </TableCell>
                     <TableCell className="font-medium text-sm">{item.recipient}</TableCell>
                     <TableCell>
@@ -485,6 +519,12 @@ function EmailLogSection() {
                       ) : (
                         <span className="text-muted-foreground">—</span>
                       )}
+                    </TableCell>
+                    <TableCell>
+                      <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Delete log entry"
+                        onClick={() => setConfirmDelete({ id: item.id, label: `the log for ${item.recipient}` })}>
+                        <Trash2 className="w-4 h-4 text-muted-foreground" />
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))
@@ -519,6 +559,22 @@ function EmailLogSection() {
           </div>
         )}
       </Card>
+
+      <AlertDialog open={!!confirmDelete} onOpenChange={(o) => !o && setConfirmDelete(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {confirmDelete?.label}?</AlertDialogTitle>
+            <AlertDialogDescription>This permanently removes the log record only; it doesn't affect emails already delivered.</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => { e.preventDefault(); if (confirmDelete) deleteLogs.mutate({ id: confirmDelete.id }); }}>
+              {deleteLogs.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -538,7 +594,7 @@ function AdminsSection({ admins, isSuperAdmin }: { admins: any[]; isSuperAdmin: 
       setForm({ name: "", email: "", password: "", role: "examiner" });
       toast({ title: "Admin created" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   return (
@@ -604,7 +660,7 @@ function UniversitiesSection({ universities }: { universities: any[] }) {
       setNewName("");
       toast({ title: "University added" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const deleteUniversity = useMutation({
@@ -670,7 +726,7 @@ function ChangePasswordSection() {
       await apiRequest("POST", "/api/admin/change-password", { currentPassword: current, newPassword: newPass });
     },
     onSuccess: () => { setCurrent(""); setNewPass(""); toast({ title: "Password changed" }); },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   return (
@@ -705,7 +761,7 @@ function CohortsSection() {
       setEditingId(null);
       toast({ title: "Cohort updated" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   if (isLoading) return <div className="h-40 bg-muted/20 animate-pulse rounded-lg" />;
@@ -754,14 +810,14 @@ function CohortsSection() {
         <p className="text-sm text-muted-foreground">Update the current and next membership cohorts. Dates must be YYYY-MM-DD.</p>
       </div>
       <div className="space-y-3">
-        {renderCohort(current, "Current Cohort", true)}
-        {renderCohort(next, "Next Cohort", true)}
+        {renderCohort(current, `Current: ${cohortName(current)}`, true)}
+        {renderCohort(next, `Next: ${cohortName(next)}`, true)}
       </div>
       {history?.length > 0 && (
         <div className="mt-8">
           <h4 className="font-medium text-sm mb-3">History</h4>
           <div className="space-y-2 opacity-75">
-            {history.map((h: any) => renderCohort(h, `Cohort ${h.id}`, false))}
+            {history.map((h: any) => renderCohort(h, cohortName(h), false))}
           </div>
         </div>
       )}
@@ -793,7 +849,7 @@ function PaymentsSection() {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/settings"] });
       toast({ title: "Settings updated" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   if (isLoading || !form) return <div className="h-40 bg-muted/20 animate-pulse rounded-lg" />;

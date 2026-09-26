@@ -5,6 +5,7 @@ import { pool } from "./db";
 import { getStage10ClassMembers } from "./stage10";
 import { cohortEndDate, ensureCurrentAndNextCohorts, isDate, nairobiDate } from "./stage3-storage";
 import { sendLoggedEmail } from "./stage11-email";
+import { publicSiteUrl } from "./site-url";
 
 const HEADERS = ["full_name", "email", "phone", "mpesa_code", "plan"];
 const CODE_PATTERN = /^[A-Z0-9]{10}$/;
@@ -122,6 +123,7 @@ async function validateRows(db: Queryable, rows: MemberRow[]): Promise<CsvResult
               ARRAY_AGG(DISTINCT student_id) AS student_ids
          FROM medqrown_payment_entries
         WHERE UPPER(REGEXP_REPLACE(code, '[[:space:]]', '', 'g')) = ANY($1::text[])
+          AND status <> 'rejected'
         GROUP BY UPPER(REGEXP_REPLACE(code, '[[:space:]]', '', 'g')), plan`,
       [codes],
     )
@@ -164,6 +166,10 @@ async function validateRows(db: Queryable, rows: MemberRow[]): Promise<CsvResult
     }
     if (groupRows.length > 4) {
       for (const row of groupRows) row.errors.push("A Group M-Pesa code can be used at most 4 times");
+    }
+    const plansForCode = new Set([...existing.plans, ...applicableRows.map((row) => row.plan)]);
+    if (plansForCode.size > 1) {
+      for (const row of applicableRows) row.errors.push("Plan does not match other entries with this M-Pesa code");
     }
     const seenStudentIds = new Set(existing.studentIds);
     const seenEmails = new Set<string>();
@@ -212,6 +218,7 @@ export async function validatePaymentCode(
             BOOL_OR(student_id = $2) AS used_by_student
        FROM medqrown_payment_entries
       WHERE UPPER(REGEXP_REPLACE(code, '[[:space:]]', '', 'g')) = $1
+        AND status <> 'rejected' -- a rejected entry did not use the code; the student may resubmit
        GROUP BY UPPER(REGEXP_REPLACE(code, '[[:space:]]', '', 'g')), plan`,
     [code, studentId],
   );
@@ -236,8 +243,8 @@ function makeInvite() {
   return { token, hash: sha256(token), expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) };
 }
 
-function inviteOrigin(req: { get(name: string): string | undefined; protocol: string }): string {
-  const configured = process.env.APP_URL || process.env.PUBLIC_URL;
+export function inviteOrigin(req: { get(name: string): string | undefined; protocol: string }): string {
+  const configured = publicSiteUrl();
   if (configured) return configured.replace(/\/$/, "");
   const host = req.get("host");
   if (!host) throw new Error("An application URL is required to send invitations");
@@ -246,7 +253,7 @@ function inviteOrigin(req: { get(name: string): string | undefined; protocol: st
   return `${req.protocol}://${host}`;
 }
 
-async function sendInvite(email: string, name: string, token: string, origin: string): Promise<void> {
+export async function sendInvite(email: string, name: string, token: string, origin: string): Promise<void> {
   const link = `${origin}/student/set-password/${encodeURIComponent(token)}`;
   await sendLoggedEmail({
     to: email, templateKey: "invite_set_password",
@@ -313,9 +320,10 @@ async function applyMembership(client: Queryable, studentId: number, adminId: nu
     const current = cohorts.find((cohort: any) => cohort.startDate <= today && cohort.endDate >= today)
       || cohorts.find((cohort: any) => cohort.startDate > today)
       || cohorts[cohorts.length - 1];
-    const withinLastThreeDays = today <= current.endDate
+    // Before any cohort has started, the upcoming cohort counts as current (launch case).
+    const withinLastThreeDays = today >= current.startDate && today <= current.endDate
       && Math.floor((Date.parse(`${current.endDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000) <= 2;
-    selected = today < current.startDate || withinLastThreeDays
+    selected = withinLastThreeDays
       ? cohorts.find((cohort: any) => cohort.startDate > current.endDate) || current
       : current;
   }
@@ -365,13 +373,14 @@ async function pendingTargetCohort(client: Queryable, studentId: number): Promis
     || cohorts.find((cohort: any) => cohort.startDate > today)
     || cohorts[cohorts.length - 1];
   const daysLeft = Math.floor((Date.parse(`${current.endDate}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86400000);
-  const target = today < current.startDate || (daysLeft >= 0 && daysLeft <= 2)
+  // Before any cohort has started, the upcoming cohort counts as current (launch case).
+  const target = today >= current.startDate && daysLeft >= 0 && daysLeft <= 2
     ? cohorts.find((cohort: any) => cohort.startDate > current.endDate) || current
     : current;
   return Number(target.id);
 }
 
-async function insertInvite(client: Queryable, studentId: number) {
+export async function insertInvite(client: Queryable, studentId: number) {
   const invite = makeInvite();
   await client.query(
     `INSERT INTO medqrown_invites (student_id, token_hash, expires_at, used_at, created_at)
@@ -644,6 +653,25 @@ export function registerStage4Routes(app: Express, requireAdmin: RequestHandler)
     for (const invite of actions.invites) await sendInvite(invite.email, invite.name, invite.token, inviteOrigin(req));
     for (const notice of actions.notices) await sendCohortNotice(notice.email, notice.name);
     res.status(201).json({ classId, ...outcome });
+  });
+
+  // Removes the student from this class only; their account, membership and results are kept.
+  app.delete("/api/admin/classes/:classId/members/:studentId", requireAdmin, async (req: any, res) => {
+    const classId = Number(req.params.classId);
+    const studentId = Number(req.params.studentId);
+    if (!Number.isInteger(classId) || classId < 1 || !Number.isInteger(studentId) || studentId < 1) {
+      return res.status(400).json({ message: "Invalid class or student id" });
+    }
+    const { rowCount } = await pool.query(
+      "DELETE FROM medqrown_class_students WHERE class_id = $1 AND student_id = $2",
+      [classId, studentId],
+    );
+    if (!rowCount) return res.status(404).json({ message: "Student is not a member of this class" });
+    await pool.query(
+      "INSERT INTO audit_logs (admin_id, action, details) VALUES ($1, $2, $3)",
+      [req.admin.id, "class_member_removed", `Class ${classId}: removed student ${studentId}`],
+    );
+    res.json({ ok: true });
   });
 
   app.post("/api/admin/students/:studentId/resend-invite", requireAdmin, async (req, res) => {

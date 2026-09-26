@@ -84,6 +84,9 @@ import medqrownIcon from "@/assets/medqrown-icon.png";
 import demoStudents from "@/assets/demo-students.jpg";
 import { FEATURES } from "@/lib/feature-flags";
 import { FormattedDemoText } from "@/components/formatted-demo-text";
+import { RegistrationCta, useRegistrationStatus } from "@/components/RegistrationCta";
+import { trackEngagement } from "@/lib/engagement";
+import { formatNairobi } from "@/lib/datetime";
 
 type DemoExamData = { id: number; title: string; timerSeconds: number };
 type DemoQuestionData = {
@@ -201,21 +204,27 @@ function SubjectDropdown({
 const features = [
   {
     icon: Brain,
-    title: "Weekly Academic Sessions",
-    description: "Online academic session every Monday, 8:00–10:00 pm, focused on core concepts and clinical reasoning.",
-    badge: "LIVE",
-  },
-  {
-    icon: FlaskConical,
-    title: "Fortnightly Anatomy Lab",
-    description: "Physical gross anatomy lab every two weeks on Saturday, 10:00 am–1:00 pm.",
+    title: "Weekly Online Session",
+    description: "Mondays, 8:00–10:00 pm. We cover the objectives for the coming week so you're familiar with the content before lectures.",
     badge: "LIVE",
   },
   {
     icon: Activity,
-    title: "Saturday Mock CAT & Revision",
-    description: "Mock CAT every Saturday, 8:00–8:30 pm, followed by online revision from 8:30–10:30 pm.",
+    title: "Weekly Mock CAT",
+    description: "Saturdays, 8:00–8:30 pm, on this website, structured like the real exams.",
     badge: "LIVE",
+  },
+  {
+    icon: Brain,
+    title: "Weekly Revision Session",
+    description: "Saturdays, 8:30–10:30 pm. We go through the tested concepts and areas of difficulty.",
+    badge: "LIVE",
+  },
+  {
+    icon: FlaskConical,
+    title: "Physical Gross Anatomy Lab",
+    description: "Every two weeks, Saturday, 10:00 am–1:00 pm.",
+    badge: "IN PERSON",
   },
 ];
 
@@ -376,11 +385,7 @@ function Navbar() {
               </div>
 
               <div className="relative z-10 mt-auto pt-8">
-                <Link href="/student/signup" onClick={() => setMenuOpen(false)}>
-                  <Button className="w-full h-13 rounded-2xl font-bold text-base py-6 gap-2">
-                    Start Practicing <ArrowRight className="w-5 h-5" />
-                  </Button>
-                </Link>
+                <RegistrationCta className="w-full rounded-2xl text-base py-6" onNavigate={() => setMenuOpen(false)} />
               </div>
             </nav>
           </motion.div>
@@ -397,8 +402,8 @@ function HeroSection() {
     queryKey: ["/api/site-content"],
   });
   
-  const registrationOpen = contentData?.settings?.registrationOpen === true;
-  const googleFormUrl = contentData?.settings?.googleFormUrl || "";
+  const { registrationOpen } = useRegistrationStatus();
+  useEffect(() => { trackEngagement("page_view", "home"); }, []);
 
   return (
     <section className="min-h-[90vh] bg-gradient-to-br from-background via-background to-primary/5 flex items-center justify-center pt-16">
@@ -442,19 +447,7 @@ function HeroSection() {
           transition={{ duration: 0.5, delay: 0.3 }}
           className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-6"
         >
-          {registrationOpen ? (
-            <a href={googleFormUrl || "#"} target="_blank" rel="noopener noreferrer">
-              <Button size="lg" className="px-8 h-12 text-base font-semibold gap-2">
-                Register Now <ArrowRight className="w-5 h-5" />
-              </Button>
-            </a>
-          ) : (
-            <Link href="/student/signup">
-              <Button size="lg" className="px-8 h-12 text-base font-semibold gap-2">
-                Join the Waitlist <ArrowRight className="w-5 h-5" />
-              </Button>
-            </Link>
-          )}
+          <RegistrationCta className="px-8 h-12 text-base" />
         </motion.div>
 
         <motion.p
@@ -463,7 +456,13 @@ function HeroSection() {
           transition={{ delay: 0.5 }}
           className="text-muted-foreground text-sm mt-4"
         >
-          {registrationOpen ? "Registration is currently open for the upcoming sessions." : "Registration is currently closed. Join our waitlist to be notified when spots open."}
+          {registrationOpen
+            ? (contentData?.settings?.registrationClosesAt
+                ? `Registration is open until ${formatNairobi(contentData.settings.registrationClosesAt)}.`
+                : "Registration is open for this cohort.")
+            : (contentData?.settings?.registrationOpensAt
+                ? `Registration opens ${formatNairobi(contentData.settings.registrationOpensAt)}. Join the waitlist and we'll email you.`
+                : "Registration is currently closed. Join our waitlist to be notified when spots open.")}
         </motion.p>
 
       </div>
@@ -490,6 +489,14 @@ function InteractiveDemoCard() {
   const { data: demoExams = [] } = useQuery<DemoExamData[]>({
     queryKey: ["/api/demo/exams"],
   });
+
+  // Shared demo links: /demo?subject=Anatomy preselects that subject.
+  useEffect(() => {
+    if (selectedExamId || !demoExams.length) return;
+    const wanted = new URLSearchParams(window.location.search).get("subject")?.trim().toLowerCase();
+    const match = wanted && demoExams.find((e) => e.title.toLowerCase() === wanted);
+    if (match) setSelectedExamId(match.id);
+  }, [demoExams, selectedExamId]);
 
   const selectedExam = demoExams.find((e) => e.id === selectedExamId);
 
@@ -518,6 +525,7 @@ function InteractiveDemoCard() {
     const sessionId = createDemoSessionId();
     setDemoSessionId(sessionId);
     trackDemoEngagement({ examId: selectedExamId, sessionId, eventType: "started" });
+    trackEngagement("demo_start", "demo");
     // Refetch so a fresh random MCQ + SAQ is pulled from the bank each attempt
     queryClient.invalidateQueries({ queryKey: [`/api/demo/exams/${selectedExamId}/questions`] });
     setPhase("mcq");
@@ -546,6 +554,7 @@ function InteractiveDemoCard() {
     if (!saqQ) {
       if (selectedExamId && demoSessionId) {
         trackDemoEngagement({ examId: selectedExamId, sessionId: demoSessionId, eventType: "completed" });
+        trackEngagement("demo_complete", "demo");
       }
       setPhase("done");
       return;
@@ -592,6 +601,7 @@ function InteractiveDemoCard() {
           responseLength: saqText.trim().length,
         });
         trackDemoEngagement({ examId: selectedExamId, sessionId: demoSessionId, eventType: "completed" });
+        trackEngagement("demo_complete", "demo");
       }
     },
   });
@@ -747,12 +757,9 @@ function InteractiveDemoCard() {
                     <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/25 bg-primary/[0.05] px-4 py-3">
                       <p className="text-xs text-foreground leading-snug">
                         <span className="font-bold">Enjoying this?</span>{" "}
-                        <span className="text-muted-foreground">Create a free account to save your streak.</span>
+                        <span className="text-muted-foreground">Members take a Mock CAT like this every Saturday.</span>
                       </p>
                       <div className="flex items-center gap-2 shrink-0">
-                        <Link href="/student/signup">
-                          <Button size="sm" className="text-xs h-7 px-3 rounded-lg font-bold">Sign up free</Button>
-                        </Link>
                         <button
                           onClick={() => setMcqNudgeDismissed(true)}
                           aria-label="Dismiss"
@@ -803,20 +810,25 @@ function InteractiveDemoCard() {
               )}
               {phase === "saq_result" && (
                 <div className="space-y-4">
-                  <div className="border border-primary/20 rounded-2xl p-5 bg-primary/[0.03]">
-                    <p className="text-[10px] font-bold text-primary uppercase tracking-widest mb-2">Model Answer</p>
-                    <FormattedDemoText text={saqResultData?.modelAnswer || "No model answer provided."} className="text-sm text-foreground mb-4 leading-relaxed whitespace-pre-wrap" />
-                    
-                    <p className="text-[10px] font-bold text-primary uppercase tracking-widest mb-2 border-t border-primary/10 pt-4">Marking Points</p>
-                    <FormattedDemoText text={saqResultData?.markingPoints || "No marking points provided."} className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap" />
-                  </div>
-                  <div className="flex flex-col sm:flex-row items-center justify-between gap-4 mt-2">
-                    <p className="text-xs text-muted-foreground flex-1">
-                      Compare your response with the model answer and marking points above.
-                    </p>
-                    <Button onClick={handleReset} className="w-full sm:w-auto font-bold shrink-0">
-                      Try Another Exam
-                    </Button>
+                  {/* The answer is shown blurred: members get the full answer, marking and explanations every week. */}
+                  <div className="relative overflow-hidden rounded-2xl border border-primary/20">
+                    <div aria-hidden="true" className="p-5 bg-primary/[0.03] blur-[5px] select-none pointer-events-none">
+                      <p className="text-[10px] font-bold text-primary uppercase tracking-widest mb-2">Model Answer</p>
+                      <FormattedDemoText text={saqResultData?.modelAnswer || ""} className="text-sm text-foreground mb-4 leading-relaxed whitespace-pre-wrap" />
+                      <p className="text-[10px] font-bold text-primary uppercase tracking-widest mb-2 border-t border-primary/10 pt-4">Marking Points</p>
+                      <FormattedDemoText text={saqResultData?.markingPoints || ""} className="text-xs text-muted-foreground leading-relaxed whitespace-pre-wrap" />
+                    </div>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-background/60 backdrop-blur-[1px] px-5 text-center">
+                      <Crown className="w-8 h-8 text-primary" />
+                      <p className="font-bold text-foreground text-lg leading-tight">Unlock the model answer &amp; marking</p>
+                      <p className="text-sm text-muted-foreground max-w-xs">
+                        Members see exactly how every answer is marked, get it explained, and take a Mock CAT like this every Saturday.
+                      </p>
+                      <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                        <RegistrationCta size="default" className="rounded-xl" />
+                        <Button variant="outline" onClick={handleReset} className="rounded-xl">Try again</Button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               )}
@@ -851,11 +863,10 @@ function DemoSection() {
   const { data: siteContent } = useQuery<SiteContentData>({ queryKey: ["/api/site-content"] });
   const settings = siteContent?.settings || {};
   const photoUrl: string = settings.demoPhotoUrl || demoStudents;
-  const photoHeadline: string = settings.demoPhotoHeadline || "Study less. Rank higher.";
+  const photoHeadline: string = settings.demoPhotoHeadline || "Stay ahead all semester.";
   const photoSubtext: string =
     settings.demoPhotoSubtext ||
-    "Expert feedback in seconds, real clinical cases, and a competitive edge. This is how you prepare for success.";
-  const photoCta: string = settings.demoPhotoCta || "Join Them";
+    "Weekly sessions before lectures, a Saturday Mock CAT structured like the real exams, and revision on the concepts you found hardest.";
 
   return (
     <section id="demo-section" className="relative bg-background pt-24 pb-10 overflow-hidden scroll-mt-16">
@@ -888,11 +899,7 @@ function DemoSection() {
               <p className="text-muted-foreground text-lg leading-relaxed">
                 {photoSubtext}
               </p>
-              <Link href="/student/signup">
-                <Button size="lg" className="rounded-xl px-8 h-13 font-bold gap-2">
-                  {photoCta} <ArrowRight className="w-4 h-4" />
-                </Button>
-              </Link>
+              <RegistrationCta className="rounded-xl px-8" />
             </div>
           </div>
         </div>
@@ -1135,6 +1142,13 @@ function Footer() {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function LandingPage() {
+  // Shareable link straight to the demo: /demo, /demo?subject=Anatomy&src=whatsapp or /#demo.
+  useEffect(() => {
+    if (window.location.pathname !== "/demo" && window.location.hash !== "#demo") return;
+    const timer = setTimeout(() => document.getElementById("demo-section")?.scrollIntoView({ behavior: "smooth", block: "start" }), 400);
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <div className="min-h-screen">
       <Navbar />

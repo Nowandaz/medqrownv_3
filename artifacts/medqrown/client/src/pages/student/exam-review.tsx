@@ -26,9 +26,9 @@ export default function StudentResults() {
   const examId = searchParams.get("examId");
   const resultsUrl = examId ? `/api/student/exams/${examId}/results` : "/api/student/results";
 
-  const { data: session } = useQuery<any>({
+  // The session is needed for every view (with or without ?examId=) to know who is signed in.
+  const { data: session, isLoading: sessionLoading } = useQuery<any>({
     queryKey: ["/api/student/session"],
-    enabled: !examId,
   });
 
   const { data: results, isLoading } = useQuery<any>({
@@ -65,7 +65,7 @@ export default function StudentResults() {
     window.print();
   };
 
-  if (isLoading) {
+  if (isLoading || sessionLoading) {
     return (
       <div className="min-h-screen bg-background p-6">
         <div className="max-w-3xl mx-auto space-y-4">
@@ -90,7 +90,7 @@ export default function StudentResults() {
     return (
       <div className="min-h-screen bg-gradient-to-b from-background to-primary/3">
         <header className="border-b bg-card/80 backdrop-blur-sm">
-          <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+          <div className="max-w-3xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-3">
               <div>
                 <MedQrownBrand size="sm" />
@@ -129,19 +129,25 @@ export default function StudentResults() {
     );
   }
 
-  const passed = results?.percentage >= 50;
+  const percentage = Number(results?.percentage ?? 0);
+  // Encouraging, not pass/fail: the score speaks for itself.
+  const band = percentage >= 75
+    ? { title: "Excellent work", note: "You've got a strong grip on this material." }
+    : percentage >= 50
+      ? { title: "Solid effort", note: "Review the questions you missed to lock them in." }
+      : { title: "Every attempt counts", note: "Go through the answers below — we'll cover the tricky ones at Saturday revision." };
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-background to-primary/3">
       <header className="border-b bg-card/80 backdrop-blur-sm print:hidden">
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
+        <div className="max-w-3xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <div>
               <MedQrownBrand size="sm" />
               <p className="text-xs text-muted-foreground">Welcome, {session?.studentName}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setLocation("/student/dashboard")} className="gap-1.5" data-testid="button-back-dashboard">
               <ArrowLeft className="w-3.5 h-3.5" />Back
             </Button>
@@ -171,45 +177,48 @@ export default function StudentResults() {
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
         {!results?.released ? (
           <Card className="border-primary/10 shadow-sm overflow-hidden">
-            <div className="bg-gradient-to-r from-primary/5 to-transparent p-1" />
-            <CardContent className="py-14 text-center">
-              <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 border border-primary/20 mb-4">
-                <Clock className="w-8 h-8 text-primary" />
+            <div className="h-1.5 bg-gradient-to-r from-primary to-emerald-400" />
+            <CardContent className="py-12 text-center space-y-4">
+              <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-500/10 border border-green-500/20">
+                <CheckCircle className="w-8 h-8 text-green-600" />
               </div>
-              <h2 className="text-xl font-bold mb-2">Exam Submitted</h2>
-              <p className="text-muted-foreground max-w-sm mx-auto" data-testid="text-waiting-message">
-                {results?.message || "Your exam has been submitted. Results will be available once released by the examiner."}
-              </p>
+              <div>
+                <h2 className="text-xl font-bold">Exam submitted</h2>
+                <p className="text-muted-foreground max-w-sm mx-auto mt-1" data-testid="text-waiting-message">
+                  Your answers are saved. Results appear here once your tutors release them — we'll notify you.
+                </p>
+              </div>
+              <div className="flex flex-wrap justify-center gap-2 pt-2">
+                <Button onClick={() => setLocation("/student/dashboard")}>Back to dashboard</Button>
+                <Button variant="outline" onClick={() => setLocation("/student/results")}>My results</Button>
+              </div>
             </CardContent>
           </Card>
         ) : (
           <>
             <Card className="border-primary/10 shadow-sm overflow-hidden">
-              <div className={`h-1.5 ${passed ? "bg-gradient-to-r from-green-500 to-emerald-400" : "bg-gradient-to-r from-red-500 to-orange-400"}`} />
+              <div className="h-1.5 bg-gradient-to-r from-primary to-emerald-400" />
               <CardContent className="pt-6 pb-5">
                 <div className="text-center mb-6">
-                  <div className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-3 ${
-                    passed ? "bg-green-500/10 border border-green-500/20" : "bg-red-500/10 border border-red-500/20"
-                  }`}>
-                    {passed ? <TrendingUp className="w-8 h-8 text-green-600" /> : <TrendingDown className="w-8 h-8 text-red-500" />}
+                  <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl mb-3 bg-primary/10 border border-primary/20">
+                    <TrendingUp className="w-8 h-8 text-primary" />
                   </div>
                   <h2 className="text-xl font-bold" data-testid="text-exam-title">{results.examTitle}</h2>
-                  <p className="text-sm text-muted-foreground mt-1">Your Results</p>
+                  <p className="text-base font-semibold text-primary mt-2">{band.title}</p>
+                  <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">{band.note}</p>
                 </div>
 
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-3 gap-3 sm:gap-4">
                   <div className="text-center p-3 rounded-xl bg-primary/5 border border-primary/10">
-                    <p className="text-3xl font-bold text-primary" data-testid="text-score">{results.totalScore}</p>
+                    <p className="text-2xl sm:text-3xl font-bold text-primary" data-testid="text-score">{results.totalScore}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">Score</p>
                   </div>
                   <div className="text-center p-3 rounded-xl bg-muted/50 border">
-                    <p className="text-3xl font-bold" data-testid="text-max-score">{results.maxScore}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">Max Score</p>
+                    <p className="text-2xl sm:text-3xl font-bold" data-testid="text-max-score">{results.maxScore}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Out of</p>
                   </div>
-                  <div className={`text-center p-3 rounded-xl border ${passed ? "bg-green-500/5 border-green-500/15" : "bg-red-500/5 border-red-500/15"}`}>
-                    <p className={`text-3xl font-bold ${passed ? "text-green-600" : "text-destructive"}`} data-testid="text-percentage">
-                      {results.percentage.toFixed(1)}%
-                    </p>
+                  <div className="text-center p-3 rounded-xl bg-primary/5 border border-primary/10">
+                    <p className="text-2xl sm:text-3xl font-bold text-primary" data-testid="text-percentage">{percentage.toFixed(0)}%</p>
                     <p className="text-xs text-muted-foreground mt-0.5">Percentage</p>
                   </div>
                 </div>
@@ -251,7 +260,7 @@ export default function StudentResults() {
                       </div>
                     )}
 
-                    {[...(q.responses || [])].sort((a: any, b: any) => {
+                    {[...(q.responses?.length ? q.responses : [{ id: `none-${q.id}`, answer: null, isCorrect: false, marksAwarded: 0, subquestionId: null }])].sort((a: any, b: any) => {
                         const ai = q.subquestions?.findIndex((s: any) => s.id === a.subquestionId) ?? 0;
                         const bi = q.subquestions?.findIndex((s: any) => s.id === b.subquestionId) ?? 0;
                         return ai - bi;
@@ -321,6 +330,12 @@ export default function StudentResults() {
                                     <span className="font-medium">{r.answer}</span>
                                   )}
                                 </p>
+                                {(subQ?.expectedAnswer || q.expectedAnswer) && (
+                                  <p className="text-sm mt-2 rounded-md bg-green-500/5 border border-green-500/20 px-2.5 py-1.5">
+                                    <span className="text-xs font-semibold text-green-700 dark:text-green-400">Model answer: </span>
+                                    <span className="whitespace-pre-wrap">{subQ?.expectedAnswer || q.expectedAnswer}</span>
+                                  </p>
+                                )}
                               </div>
                             )}
                             {r.marksAwarded != null && (

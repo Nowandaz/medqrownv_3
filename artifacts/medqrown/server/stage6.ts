@@ -59,6 +59,7 @@ export function registerStage6Routes(app: Express, requireAdmin: RequestHandler,
     const { rows } = await pool.query(
       `SELECT e.id, e.title, e.class_id AS "classId", e.opens_at AS "opensAt",
               e.closes_at AS "closesAt", e.duration_minutes AS "durationMinutes",
+              e.timer_mode AS "timerMode", e.per_question_seconds AS "perQuestionSeconds",
               e.max_attempts AS "maxAttempts", e.instructions, e.results_released AS "resultsReleased",
               COALESCE(e.auto_mark_enabled, true) AS "autoMarkEnabled",
               COALESCE((SELECT COUNT(*)::int FROM attempts a JOIN exam_students own_es ON own_es.id = a.exam_student_id
@@ -76,7 +77,8 @@ export function registerStage6Routes(app: Express, requireAdmin: RequestHandler,
     res.json(rows.map((exam: any) => {
       const beforeOpen = exam.opensAt != null && new Date(exam.opensAt).getTime() > now;
       const afterClose = exam.closesAt != null && new Date(exam.closesAt).getTime() <= now;
-      const scheduleConfigured = exam.opensAt != null && exam.closesAt != null && exam.durationMinutes > 0;
+      const scheduleConfigured = exam.opensAt != null && exam.closesAt != null
+        && (exam.timerMode === "per_question" ? exam.perQuestionSeconds > 0 : exam.durationMinutes > 0);
       const canTake = scheduleConfigured && isOpen(exam.opensAt, exam.closesAt, now)
         && ["active", "grace"].includes(membershipStatus);
       return {
@@ -146,19 +148,19 @@ export function registerStage6Routes(app: Express, requireAdmin: RequestHandler,
         const inserted = await client.query(
           `INSERT INTO medqrown_notifications (student_id, kind, title, body, payload)
            SELECT DISTINCT es.student_id, 'exam_results', 'Exam results released',
-                  $2 || ' results are now available.',
+                  $2::text || ' results are now available.',
                   jsonb_build_object(
-                    'type', 'exam_results', 'examId', $1, 'title', $2,
-                    'route', '/student/exams/' || $1 || '/results',
+                    'type', 'exam_results', 'examId', $1::int, 'title', $2::text,
+                    'route', '/student/exams/' || $1::int::text || '/results',
                     'pushReady', jsonb_build_object('title', 'Exam results released',
-                      'body', $2 || ' results are now available.', 'url', '/student/exams/' || $1 || '/results')
+                      'body', $2::text || ' results are now available.', 'url', '/student/exams/' || $1::int::text || '/results')
                   )
              FROM exam_students es JOIN attempts a ON a.exam_student_id = es.id
-            WHERE es.exam_id = $1 AND a.status = 'submitted'
+            WHERE es.exam_id = $1::int AND a.status = 'submitted'
               AND NOT EXISTS (
                 SELECT 1 FROM medqrown_notifications n
                  WHERE n.student_id = es.student_id AND n.kind = 'exam_results'
-                   AND n.payload->>'examId' = $1::text
+                   AND n.payload->>'examId' = $1::int::text
               )
             RETURNING id, student_id AS "studentId"`,
           [examId, exams[0].title],
@@ -228,7 +230,7 @@ export function registerStage6Routes(app: Express, requireAdmin: RequestHandler,
               ) ORDER BY sq.order_index) FROM subquestions sq WHERE sq.question_id = q.id), '[]'::json) AS subquestions,
               COALESCE((SELECT json_agg(json_build_object(
                 'id', r.id, 'subquestionId', r.subquestion_id, 'answer', r.answer,
-                'isCorrect', r.is_correct, 'marksAwarded', r.marks_awarded, 'feedback', r.ai_feedback
+                'isCorrect', r.is_correct, 'marksAwarded', r.marks_awarded, 'aiFeedback', r.ai_feedback
               ) ORDER BY r.id) FROM responses r WHERE r.attempt_id = $2 AND r.question_id = q.id), '[]'::json) AS responses
          FROM questions q WHERE q.exam_id = $1 ORDER BY q.order_index, q.id`,
       [examId, attemptId],
@@ -244,6 +246,12 @@ export function registerStage6Routes(app: Express, requireAdmin: RequestHandler,
                 WHERE q.exam_id = $2) AS "maxScore"`,
       [attemptId, examId],
     );
-    res.json({ released: true, examTitle: exams[0].title, ...score[0], questions });
+    const totalScore = Number(score[0]?.totalScore || 0);
+    const maxScore = Number(score[0]?.maxScore || 0);
+    res.json({
+      released: true, examTitle: exams[0].title, totalScore, maxScore,
+      percentage: maxScore > 0 ? Math.round((totalScore / maxScore) * 1000) / 10 : 0,
+      questions,
+    });
   });
 }

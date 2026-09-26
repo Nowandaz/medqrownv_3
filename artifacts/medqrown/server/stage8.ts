@@ -125,6 +125,25 @@ export function registerStage8Routes(app: Express, requireStudent: RequestHandle
     });
   });
 
+  /** Submitted exams whose results aren't released yet (shown as "Awaiting results"; no scores). */
+  app.get("/api/student/results/pending", requireStudent, async (req: any, res) => {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT ON (e.id) a.id AS "attemptId", e.id AS "examId", e.title AS "examTitle",
+              COALESCE(c.name, 'Exam') AS "className", a.submitted_at AS "submittedAt"
+         FROM attempts a
+         JOIN exam_students es ON es.id = a.exam_student_id
+         JOIN exams e ON e.id = es.exam_id
+         LEFT JOIN medqrown_classes c ON c.id = e.class_id
+        WHERE es.student_id = $1 AND a.status = 'submitted'
+          AND (e.results_released IS NOT TRUE OR EXISTS (
+            SELECT 1 FROM responses r JOIN questions q ON q.id = r.question_id
+             WHERE r.attempt_id = a.id AND q.type = 'saq' AND r.is_correct IS NULL))
+        ORDER BY e.id, a.submitted_at DESC NULLS LAST`,
+      [req.student.id],
+    );
+    res.json(rows.sort((x: any, y: any) => String(y.submittedAt).localeCompare(String(x.submittedAt))));
+  });
+
   app.get("/api/student/results/history", requireStudent, async (req: any, res) => {
     const results = await ownReleasedResults(Number(req.student.id));
     res.json(results);

@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { pool } from "./db";
+import { renderEmailHtml } from "./email-layout";
 
 export type EmailVariables = Record<string, string | number | null | undefined>;
 export type EmailResult = { status: "sent" | "failed"; error?: string };
@@ -53,11 +54,22 @@ export async function sendLoggedEmail(input: {
     }
     const subject = interpolate(subjectTemplate ?? "", variables);
     const text = interpolate(bodyTemplate ?? "", variables);
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
+    // EMAIL_OUTBOX_ONLY=true (local testing) never contacts SMTP, even if credentials are present.
+    const outboxOnly = process.env.EMAIL_OUTBOX_ONLY === "true";
+    const smtpUser = outboxOnly ? undefined : process.env.SMTP_USER;
+    const smtpPass = outboxOnly ? undefined : process.env.SMTP_PASS;
     if (process.env.NODE_ENV === "test" || process.env.VITEST) {
       result = { status: "failed", error: "Email delivery is disabled in test environments" };
     } else if (!smtpUser || !smtpPass) {
+      if (process.env.NODE_ENV === "development") {
+        // Local development without SMTP: keep a copy so invite/reset links can be tested.
+        const { appendFile, writeFile, mkdir } = await import("node:fs/promises");
+        await mkdir("dev-outbox", { recursive: true });
+        await writeFile(`dev-outbox/${input.templateKey.replace(/[^a-z0-9_-]/gi, "_")}.html`,
+          renderEmailHtml(input.templateKey, subject, text, variables));
+        await appendFile("dev-outbox.log",
+          `\n=== ${new Date().toISOString()} ${input.templateKey} -> ${recipient}\nSubject: ${subject}\n${text}\n`);
+      }
       result = { status: "failed", error: "SMTP is not configured (SMTP_USER and SMTP_PASS are required)" };
     } else {
       const transporter = nodemailer.createTransport({
@@ -77,7 +89,7 @@ export async function sendLoggedEmail(input: {
         subject,
         text,
         html: input.html === undefined
-          ? `<div style="font-family:Arial,sans-serif;line-height:1.6">${escapeHtml(text).replace(/\n/g, "<br>")}</div>`
+          ? renderEmailHtml(input.templateKey, subject, text, variables)
           : interpolate(input.html, variables),
       } as any);
       if (Array.isArray(info.accepted) && info.accepted.length === 0) {

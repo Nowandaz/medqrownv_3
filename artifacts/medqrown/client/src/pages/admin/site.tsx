@@ -22,6 +22,8 @@ import {
   ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, Legend,
 } from "recharts";
 import { FEATURES } from "@/lib/feature-flags";
+import { apiErrorMessage } from "@/lib/api-error";
+import { toNairobiInput } from "@/lib/datetime";
 
 type FaqItem = { id: number; question: string; answer: string; orderIndex: number; isActive: boolean };
 type EngagementSummary = {
@@ -226,7 +228,7 @@ function PageEditor({ slug, defaultTitle }: { slug: string; defaultTitle: string
       queryClient.invalidateQueries({ queryKey: [`/api/pages/${slug}`] });
       toast({ title: "Saved", description: `${title} updated.` });
     },
-    onError: (e: Error) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Save failed", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   return (
@@ -295,7 +297,7 @@ function FaqTab() {
       setNewQ(""); setNewA("");
       toast({ title: "FAQ added" });
     },
-    onError: (e: Error) => toast({ title: "Failed", description: e.message, variant: "destructive" }),
+    onError: (e: Error) => toast({ title: "Failed", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const update = useMutation({
@@ -364,78 +366,134 @@ function RegistrationConfigTab() {
     queryKey: ["/api/admin/site-settings"],
   });
 
-  const [form, setForm] = useState({
-    registrationOpen: false,
-    googleFormUrl: "",
-  });
+  const [form, setForm] = useState({ registrationOpen: false, googleFormUrl: "", registrationOpensAt: "", registrationClosesAt: "" });
+  const [copied, setCopied] = useState("");
 
   useEffect(() => {
     if (settings) {
       setForm({
         registrationOpen: settings.registrationOpen || false,
         googleFormUrl: settings.googleFormUrl || "",
+        registrationOpensAt: toNairobiInput(settings.registrationOpensAt),
+        registrationClosesAt: toNairobiInput(settings.registrationClosesAt),
       });
     }
   }, [settings]);
 
   const saveConfig = useMutation({
     mutationFn: async () => {
-      await apiRequest("PUT", "/api/admin/site-settings", form);
+      // datetime-local values are Nairobi time.
+      const toIso = (v: string) => (v ? new Date(`${v}:00+03:00`).toISOString() : null);
+      await apiRequest("PUT", "/api/admin/site-settings", {
+        registrationOpen: form.registrationOpen,
+        googleFormUrl: form.googleFormUrl.trim(),
+        registrationOpensAt: toIso(form.registrationOpensAt),
+        registrationClosesAt: toIso(form.registrationClosesAt),
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/admin/site-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/site-content"] });
       toast({ title: "Registration settings saved" });
     },
-    onError: (e: any) => toast({ title: "Save failed", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Save failed", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   if (isLoading) return <p className="text-muted-foreground">Loading...</p>;
 
+  const origin = window.location.origin;
+  const demoLinks = [
+    { label: "Demo link", url: `${origin}/demo` },
+    { label: "WhatsApp", url: `${origin}/demo?src=whatsapp` },
+    { label: "Poster / QR code", url: `${origin}/demo?src=qr` },
+  ];
+  const copy = async (url: string) => {
+    try { await navigator.clipboard.writeText(url); } catch { /* shown on screen anyway */ }
+    setCopied(url);
+    setTimeout(() => setCopied(""), 2000);
+  };
+
   return (
-    <Card>
-      <CardHeader>
-        <h3 className="font-bold text-foreground flex items-center gap-2">
-          <Settings className="w-4 h-4 text-primary" /> Registration Configuration
-        </h3>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/20">
-          <div className="space-y-0.5">
-            <Label className="text-base font-semibold">Registration Status</Label>
-            <p className="text-sm text-muted-foreground">
-              {form.registrationOpen 
-                ? "Open: New students can sign up." 
-                : "Closed: New students will join the waitlist."}
-            </p>
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <h3 className="font-bold text-foreground flex items-center gap-2">
+            <Settings className="w-4 h-4 text-primary" /> Registration
+          </h3>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="flex items-center justify-between gap-4 p-4 border rounded-lg bg-muted/20">
+            <div className="space-y-0.5">
+              <Label className="text-base font-semibold">Registration status</Label>
+              <p className="text-sm text-muted-foreground">
+                {form.registrationOpen
+                  ? "Open: sign-up buttons go to your Google Form."
+                  : "Closed: sign-up buttons go to the waitlist."}
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className={`text-sm font-semibold ${form.registrationOpen ? "text-green-600" : "text-muted-foreground"}`}>
+                {form.registrationOpen ? "Open" : "Closed"}
+              </span>
+              <Switch checked={form.registrationOpen} onCheckedChange={(v) => setForm({ ...form, registrationOpen: v })} />
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <span className={`text-sm font-semibold ${form.registrationOpen ? "text-green-600" : "text-muted-foreground"}`}>
-              {form.registrationOpen ? "Open" : "Closed"}
-            </span>
-            <Switch 
-              checked={form.registrationOpen} 
-              onCheckedChange={v => setForm({ ...form, registrationOpen: v })} 
-            />
+
+          <div className="space-y-2">
+            <Label htmlFor="google-form">Google Form URL</Label>
+            <Input id="google-form" value={form.googleFormUrl} onChange={(e) => setForm({ ...form, googleFormUrl: e.target.value })}
+              placeholder="https://forms.gle/..." />
+            <p className="text-xs text-muted-foreground">Required to open registration. When registration opens, everyone on the waitlist is emailed this link once.</p>
           </div>
-        </div>
 
-        <div className="space-y-2">
-          <Label>Google Form URL (Optional)</Label>
-          <Input 
-            value={form.googleFormUrl} 
-            onChange={e => setForm({ ...form, googleFormUrl: e.target.value })} 
-            placeholder="https://docs.google.com/forms/d/e/..."
-          />
-          <p className="text-xs text-muted-foreground">
-            If provided, clicking "Register" will link to this form instead of the native signup flow.
-          </p>
-        </div>
+          <div className="space-y-3 rounded-lg border p-4">
+            <div>
+              <Label className="text-base font-semibold">Schedule (optional)</Label>
+              <p className="text-sm text-muted-foreground">Registration opens and closes by itself at these Nairobi times. Leave empty to switch it manually.</p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="reg-opens">Opens at</Label>
+                <Input id="reg-opens" type="datetime-local" value={form.registrationOpensAt}
+                  onChange={(e) => setForm({ ...form, registrationOpensAt: e.target.value })} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="reg-closes">Closes at</Label>
+                <Input id="reg-closes" type="datetime-local" value={form.registrationClosesAt}
+                  onChange={(e) => setForm({ ...form, registrationClosesAt: e.target.value })} />
+              </div>
+            </div>
+            {(form.registrationOpensAt || form.registrationClosesAt) && (
+              <Button variant="ghost" size="sm" className="px-0" onClick={() => setForm({ ...form, registrationOpensAt: "", registrationClosesAt: "" })}>
+                Clear schedule
+              </Button>
+            )}
+          </div>
 
-        <Button onClick={() => saveConfig.mutate()} disabled={saveConfig.isPending} className="gap-2">
-          <Save className="w-4 h-4" /> Save Changes
-        </Button>
-      </CardContent>
-    </Card>
+          <Button onClick={() => saveConfig.mutate()} disabled={saveConfig.isPending} className="gap-2">
+            <Save className="w-4 h-4" /> {saveConfig.isPending ? "Saving..." : "Save changes"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <h3 className="font-bold text-foreground">Share the free demo</h3>
+          <p className="text-sm text-muted-foreground">These open the website straight at the demo. Tagged links show up per source in Engagement. Add <span className="font-mono">&amp;subject=Anatomy</span> to preselect a subject.</p>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {demoLinks.map((link) => (
+            <div key={link.url} className="flex items-center justify-between gap-2 rounded-lg bg-muted p-2.5">
+              <div className="min-w-0">
+                <p className="text-xs text-muted-foreground">{link.label}</p>
+                <p className="font-mono text-sm break-all">{link.url}</p>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => copy(link.url)}>{copied === link.url ? "Copied" : "Copy"}</Button>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -447,7 +505,7 @@ export default function AdminSite() {
   });
 
   useEffect(() => {
-    if (!adminLoading && !admin) setLocation("/admin");
+    if (!adminLoading && !admin) setLocation("/");
   }, [adminLoading, admin, setLocation]);
 
   if (adminLoading) return <div className="min-h-screen bg-background" />;

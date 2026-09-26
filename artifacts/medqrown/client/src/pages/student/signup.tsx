@@ -10,6 +10,8 @@ import { AppHeader } from "@/components/AppHeader";
 import { MedQrownBrand } from "@/components/MedQrownBrand";
 import { CheckCircle2, ArrowRight, ArrowLeft } from "lucide-react";
 import { motion } from "framer-motion";
+import { engagementSessionId, engagementSource, trackEngagement } from "@/lib/engagement";
+import { apiErrorMessage } from "@/lib/api-error";
 
 export default function StudentSignup() {
   const [, setLocation] = useLocation();
@@ -19,8 +21,8 @@ export default function StudentSignup() {
     queryKey: ["/api/site-content"],
   });
 
-  const registrationOpen = contentData?.settings?.registrationOpen === true;
   const googleFormUrl = contentData?.settings?.googleFormUrl || "";
+  const registrationOpen = contentData?.settings?.registrationOpen === true && !!googleFormUrl;
 
   const [form, setForm] = useState({ name: "", email: "", phone: "" });
   const [submitted, setSubmitted] = useState(false);
@@ -30,9 +32,9 @@ export default function StudentSignup() {
       const res = await fetch("/api/waitlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form)
+        body: JSON.stringify({ ...form, sessionId: engagementSessionId(), ...(engagementSource() ? { source: engagementSource() } : {}) }),
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) throw new Error((await res.json().catch(() => null))?.message || "Please check your details and try again.");
       return res.json();
     },
     onSuccess: (data) => {
@@ -41,7 +43,7 @@ export default function StudentSignup() {
       }
       setSubmitted(true);
     },
-    onError: (e: any) => toast({ title: "Failed to join", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Failed to join", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   if (isLoading) {
@@ -57,10 +59,10 @@ export default function StudentSignup() {
           <div className="text-center mb-8">
             <MedQrownBrand size="lg" layout="stacked" />
             <h1 className="text-2xl font-bold tracking-tight mt-5">
-              {registrationOpen ? "Registration Open" : "Join the Waitlist"}
+              {registrationOpen ? "Sign up for this cohort" : "Join the waitlist"}
             </h1>
             <p className="text-muted-foreground mt-1 text-sm">
-              {registrationOpen ? "Register for MedQrown MedEazy Academic Consultancy." : "Registration is currently invite-only. Join our waitlist to be notified."}
+              MedEazy is invite-only. Join the current cohort or the waitlist to get an invite.
             </p>
           </div>
 
@@ -68,10 +70,11 @@ export default function StudentSignup() {
             <CardContent className="p-6">
               {registrationOpen ? (
                 <div className="text-center space-y-4">
-                  <p className="text-sm text-foreground">Click below to fill out the registration form.</p>
-                  <a href={googleFormUrl || "#"} target="_blank" rel="noopener noreferrer" className="block w-full">
+                  <p className="text-sm text-foreground">Pay first, then submit your details and M-Pesa code on our registration form. We'll email your invite once your payment is verified.</p>
+                  <a href={googleFormUrl} target="_blank" rel="noopener noreferrer" className="block w-full"
+                    onClick={() => trackEngagement("signup_click", "signup")}>
                     <Button size="lg" className="w-full font-bold gap-2">
-                      Open Registration Form <ArrowRight className="w-4 h-4" />
+                      Sign up for this cohort <ArrowRight className="w-4 h-4" />
                     </Button>
                   </a>
                 </div>
@@ -121,9 +124,9 @@ export default function StudentSignup() {
           </Card>
 
           <p className="text-center text-xs text-muted-foreground mt-6">
-            Already have an account?{" "}
+            Already a member?{" "}
             <Link href="/portal" className="hover:text-primary transition-colors underline underline-offset-2">
-              Log in
+              Student Login
             </Link>
           </p>
         </div>

@@ -3,12 +3,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Skeleton } from "@/components/ui/skeleton";
 import { Link } from "wouter";
 import { Button } from "@/components/ui/button";
-import { Activity, ArrowRight, Award, BarChart3, CheckCircle2, Clock, Hash, Target, Trophy } from "lucide-react";
+import { Activity, ArrowRight, Award, BarChart3, CheckCircle2, Clock, Hash, Hourglass, Target, Trophy, TrendingUp } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Progress } from "@/components/ui/progress";
+import { formatNairobi } from "@/lib/datetime";
+import { ScoreTrend } from "@/components/student/score-trend";
 
 export default function StudentResults() {
   const { data: summary, isLoading: loadingSummary } = useStage8ResultsSummary();
   const { data: history, isLoading: loadingHistory } = useStage8ResultsHistory();
+  const { data: pending } = useQuery<{ attemptId: number; examId: number; examTitle: string; className: string; submittedAt: string }[]>({
+    queryKey: ["/api/student/results/pending"], refetchOnMount: "always",
+  });
 
   if (loadingSummary || loadingHistory) {
     return (
@@ -68,87 +74,94 @@ export default function StudentResults() {
           </Card>
           <Card>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Pass Rate</CardTitle>
-              <Target className="h-4 w-4 text-green-500" />
+              <CardTitle className="text-sm font-medium">Latest</CardTitle>
+              <Target className="h-4 w-4 text-primary" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{summary.passRate}%</div>
-              <p className="text-xs text-muted-foreground mt-1">Threshold: {summary.passThreshold}%</p>
+              <div className="text-2xl font-bold">{history?.[0] ? `${history[0].scorePercent}%` : "—"}</div>
+              <p className="text-xs text-muted-foreground mt-1 truncate">{history?.[0]?.examTitle ?? "No results yet"}</p>
             </CardContent>
           </Card>
         </div>
       )}
 
+      {history && history.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><TrendingUp className="h-5 w-5 text-primary" /> Progress over time</CardTitle>
+            <CardDescription>Each point is a Mock CAT; the dashed line is your average.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <ScoreTrend results={[...history].reverse()} height={220} showAxes />
+          </CardContent>
+        </Card>
+      )}
+
+      {pending && pending.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><Hourglass className="h-5 w-5 text-primary" /> Awaiting results</CardTitle>
+            <CardDescription>Submitted — your score appears here once your tutors release it.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {pending.map((item) => (
+              <Link key={item.attemptId} href={`/student/exam-review?examId=${item.examId}`}>
+                <div className="flex items-center justify-between gap-3 p-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors cursor-pointer">
+                  <div className="min-w-0">
+                    <p className="font-medium">{item.examTitle}</p>
+                    <p className="text-xs text-muted-foreground">{item.className} · submitted {formatNairobi(item.submittedAt)}</p>
+                  </div>
+                  <span className="shrink-0 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground">Results pending</span>
+                </div>
+              </Link>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Activity className="h-5 w-5 text-primary" /> Exam History
+            <Activity className="h-5 w-5 text-primary" /> Exam history
           </CardTitle>
-          <CardDescription>
-            Your most recent completed and released exams.
-          </CardDescription>
+          <CardDescription>Your released results. Tap one to see every answer and explanation.</CardDescription>
         </CardHeader>
         <CardContent>
           {!history || history.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <Activity className="h-12 w-12 text-muted-foreground/30 mb-4" />
-              <p className="text-lg font-medium">No history yet</p>
+              <p className="text-lg font-medium">No released results yet</p>
               <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-                Complete your first exam to start seeing your performance history and detailed results here.
+                {pending?.length ? "Your submitted exams are listed above until results are released." : "Take your first Mock CAT to start building your history."}
               </p>
             </div>
           ) : (
-            <div className="space-y-4">
-              {history.map((result) => {
-                const passed = summary ? result.scorePercent >= summary.passThreshold : false;
-                
-                return (
-                  <Link key={result.attemptId} href={`/student/exam-review?examId=${result.examId}`}>
-                    <div className="flex flex-col md:flex-row md:items-center justify-between p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors cursor-pointer gap-4">
-                      <div className="space-y-1">
-                        <h4 className="font-semibold">{result.examTitle}</h4>
-                        <div className="flex items-center gap-3 text-sm text-muted-foreground">
-                          <span>{result.className}</span>
-                          <span>•</span>
-                          <span className="flex items-center gap-1">
-                            <Clock className="w-3.5 h-3.5" />
-                            {new Date(result.submittedAt).toLocaleString()}
-                          </span>
-                        </div>
-                      </div>
-                      
-                      <div className="flex items-center gap-6 md:min-w-[300px]">
-                        <div className="flex-1 space-y-1">
-                          <div className="flex justify-between text-sm">
-                            <span className="text-muted-foreground">Score</span>
-                            <span className="font-medium">{result.scorePercent}%</span>
-                          </div>
-                          <Progress value={result.scorePercent} className="h-2" />
-                          <p className="text-xs text-right text-muted-foreground mt-1">
-                            {result.earnedMarks} / {result.totalMarks} marks
-                          </p>
-                        </div>
-                        
-                        <div className="flex flex-col items-center justify-center shrink-0 w-20 border-l pl-4">
-                          {passed ? (
-                            <>
-                              <CheckCircle2 className="w-6 h-6 text-green-500 mb-1" />
-                              <span className="text-xs font-medium text-green-600 dark:text-green-400">PASSED</span>
-                            </>
-                          ) : (
-                            <>
-                              <Activity className="w-6 h-6 text-amber-500 mb-1" />
-                              <span className="text-xs font-medium text-amber-600 dark:text-amber-400">REVIEW</span>
-                            </>
-                          )}
-                        </div>
-                        
-                        <ArrowRight className="w-4 h-4 text-muted-foreground shrink-0 hidden md:block" />
-                      </div>
+            <div className="space-y-3">
+              {history.map((result) => (
+                <Link key={result.attemptId} href={`/student/exam-review?examId=${result.examId}`}>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-lg border bg-card hover:bg-muted/50 transition-colors cursor-pointer gap-3">
+                    <div className="space-y-1 min-w-0">
+                      <h4 className="font-semibold">{result.examTitle}</h4>
+                      <p className="text-sm text-muted-foreground flex flex-wrap items-center gap-x-2">
+                        <span>{result.className}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="inline-flex items-center gap-1"><Clock className="w-3.5 h-3.5" />{formatNairobi(result.submittedAt)}</span>
+                      </p>
                     </div>
-                  </Link>
-                );
-              })}
+                    <div className="flex items-center gap-4 sm:min-w-[260px]">
+                      <div className="flex-1 space-y-1">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Score</span>
+                          <span className="font-semibold">{result.scorePercent}%</span>
+                        </div>
+                        <Progress value={result.scorePercent} className="h-2" />
+                        <p className="text-xs text-right text-muted-foreground">{result.earnedMarks} / {result.totalMarks} marks</p>
+                      </div>
+                      <ArrowRight className="w-4 h-4 text-muted-foreground shrink-0" />
+                    </div>
+                  </div>
+                </Link>
+              ))}
             </div>
           )}
         </CardContent>

@@ -7,6 +7,7 @@ export interface StudentProfile {
   email: string;
   university: string;
   avatarKey: string;
+  onboardedAt?: string | null;
 }
 
 export interface Unit {
@@ -468,10 +469,11 @@ export function useUpdateAvatar() {
     mutationFn: (data: { avatarKey: string }) => 
       apiRequest("POST", "/api/student/profile/avatar", data),
     onSuccess: (_, variables) => {
-      queryClient.setQueryData<StudentProfile | undefined>(["/api/student/me"], (old) => {
-        if (!old) return old;
-        return { ...old, avatarKey: variables.avatarKey };
-      });
+      // The sidebar (/me) and the profile page (/profile) cache the student separately: update both.
+      for (const key of ["/api/student/me", "/api/student/profile"]) {
+        queryClient.setQueryData<any>([key], (old: any) => (old ? { ...old, avatarKey: variables.avatarKey } : old));
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
     },
   });
 }

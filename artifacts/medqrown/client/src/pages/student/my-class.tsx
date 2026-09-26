@@ -13,15 +13,17 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { RenewMembershipDialog } from "@/components/student/renew-membership-dialog";
+import { formatNairobi } from "@/lib/datetime";
+import { apiErrorMessage } from "@/lib/api-error";
+import { ClassTimetableView } from "@/components/student/class-timetable-view";
 
 function UpcomingCountdown({ targetDate }: { targetDate: string }) {
   const [timeLeft, setTimeLeft] = useState("");
 
   useEffect(() => {
     const target = new Date(targetDate).getTime();
-    const interval = setInterval(() => {
-      const now = new Date().getTime();
-      const distance = target - now;
+    const tick = () => {
+      const distance = target - Date.now();
       if (distance < 0) {
         setTimeLeft("Starts soon");
         clearInterval(interval);
@@ -32,8 +34,10 @@ function UpcomingCountdown({ targetDate }: { targetDate: string }) {
       const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
       if (days > 0) setTimeLeft(`${days}d ${hours}h`);
       else if (hours > 0) setTimeLeft(`${hours}h ${minutes}m`);
-      else setTimeLeft(`${minutes}m`);
-    }, 1000);
+      else setTimeLeft(`${Math.max(minutes, 1)}m`);
+    };
+    const interval = setInterval(tick, 30000);
+    tick();
     return () => clearInterval(interval);
   }, [targetDate]);
 
@@ -72,11 +76,11 @@ function ExamCard({ exam, enterExamFn, requestReattemptFn, classIdNum }: { exam:
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <span className="flex items-center gap-1">
                 <Clock className="w-3.5 h-3.5" />
-                {exam.durationMinutes} min
+                {exam.timerMode === "per_question" ? `${exam.perQuestionSeconds}s per question` : `${exam.durationMinutes} min`}
               </span>
               <span>•</span>
               <span>
-                Attempts: {exam.attemptsUsed}
+                Attempts: {exam.attemptsUsed} of {exam.maxAttempts}
               </span>
             </div>
           </div>
@@ -94,11 +98,11 @@ function ExamCard({ exam, enterExamFn, requestReattemptFn, classIdNum }: { exam:
         <div className="bg-muted/50 p-3 rounded-lg text-sm mb-4 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Opens:</span>
-            <span className="font-medium">{new Date(exam.opensAt).toLocaleString()}</span>
+            <span className="font-medium">{formatNairobi(exam.opensAt)}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Closes:</span>
-            <span className="font-medium">{new Date(exam.closesAt).toLocaleString()}</span>
+            <span className="font-medium">{formatNairobi(exam.closesAt)}</span>
           </div>
         </div>
 
@@ -115,7 +119,7 @@ function ExamCard({ exam, enterExamFn, requestReattemptFn, classIdNum }: { exam:
         <div className="flex gap-3">
           {exam.state === "upcoming" && (
             <div className="flex-1 bg-secondary/50 rounded-md flex items-center justify-center gap-2 text-sm text-muted-foreground p-2">
-              <Clock className="w-4 h-4" /> Opens in: <UpcomingCountdown targetDate={exam.opensAt} />
+              <Clock className="w-4 h-4" /> Opens {formatNairobi(exam.opensAt)} · <UpcomingCountdown targetDate={exam.opensAt} />
             </div>
           )}
           {exam.state === "open" && exam.canOpen && exam.membershipStatus !== "expired" && (
@@ -186,12 +190,31 @@ export default function StudentMyClass() {
   }, [classes, selectedClassId, urlClassId]);
 
   const classIdNum = selectedClassId ? parseInt(selectedClassId) : 0;
+  const [tab, setTab] = useState(() => {
+    const wanted = new URLSearchParams(window.location.search).get("tab");
+    return wanted && ["exams", "timetable", "announcements", "feedback"].includes(wanted) ? wanted : "exams";
+  });
   const currentClass = classes?.find(c => c.id === classIdNum);
 
   const { data: exams, isLoading: examsLoading } = useQuery<any[]>({
     queryKey: [`/api/student/classes/${classIdNum}/exams`],
     enabled: !!classIdNum,
+    refetchOnMount: "always",
   });
+
+  // Refresh the exam list the moment an exam opens or closes, so nobody has to reload the page.
+  useEffect(() => {
+    if (!exams?.length) return;
+    const now = Date.now();
+    const moments = exams
+      .flatMap((exam) => [Date.parse(exam.opensAt), Date.parse(exam.closesAt)])
+      .filter((t) => Number.isFinite(t) && t > now && t - now < 24 * 60 * 60 * 1000);
+    if (!moments.length) return;
+    const timer = setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: [`/api/student/classes/${classIdNum}/exams`] });
+    }, Math.min(...moments) - now + 1000);
+    return () => clearTimeout(timer);
+  }, [exams, classIdNum]);
 
   const enterExam = useMutation({
     mutationFn: async (examId: number) => {
@@ -206,7 +229,7 @@ export default function StudentMyClass() {
       setLocation("/student/instructions");
     },
     onError: (error: any) => {
-      toast({ title: "Cannot start exam", description: error.message, variant: "destructive" });
+      toast({ title: "Cannot start exam", description: apiErrorMessage(error), variant: "destructive" });
     },
   });
 
@@ -224,7 +247,7 @@ export default function StudentMyClass() {
       toast({ title: "Reattempt requested successfully" });
     },
     onError: (error: any) => {
-      toast({ title: "Cannot request reattempt", description: error.message, variant: "destructive" });
+      toast({ title: "Cannot request reattempt", description: apiErrorMessage(error), variant: "destructive" });
     },
   });
 
@@ -266,38 +289,46 @@ export default function StudentMyClass() {
 
   return (
     <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+      <div className="space-y-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">My Class</h1>
-          <p className="text-muted-foreground mt-2">
-            {currentClass?.name ? `Access exams and resources for ${currentClass.name}` : "View details for this class"}
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">My Class</h1>
+          <p className="text-muted-foreground mt-1">
+            {classes.length > 1 ? `You're in ${classes.length} classes — pick one below.` : currentClass?.name}
           </p>
         </div>
         {classes.length > 1 && (
-          <div className="w-full md:w-64">
-            <Select value={selectedClassId || ""} onValueChange={setSelectedClassId}>
-              <SelectTrigger>
-                <div className="flex items-center gap-2">
-                  <ListFilter className="w-4 h-4 text-muted-foreground" />
-                  <SelectValue placeholder="Select a class" />
-                </div>
-              </SelectTrigger>
-              <SelectContent>
-                {classes.map(c => (
-                  <SelectItem key={c.id} value={c.id.toString()}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1" role="tablist" aria-label="Your classes" data-tour="class-switcher">
+            {classes.map((c) => {
+              const active = c.id.toString() === selectedClassId;
+              return (
+                <button
+                  key={c.id}
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setSelectedClassId(c.id.toString())}
+                  className={`shrink-0 rounded-full border px-4 py-2 text-sm font-medium transition-colors ${
+                    active ? "bg-primary text-primary-foreground border-primary shadow-sm" : "bg-card hover:bg-muted"
+                  }`}
+                >
+                  {c.name}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>
 
-      <Tabs defaultValue="exams" className="space-y-6">
-        <TabsList>
+      <Tabs value={tab} onValueChange={setTab} className="space-y-6">
+        <TabsList className="w-full sm:w-auto overflow-x-auto no-scrollbar justify-start" data-tour="class-tabs">
           <TabsTrigger value="exams" className="gap-2"><BookOpen className="w-4 h-4" /> Exams</TabsTrigger>
+          <TabsTrigger value="timetable" className="gap-2"><Calendar className="w-4 h-4" /> Timetable</TabsTrigger>
           <TabsTrigger value="announcements" className="gap-2"><Megaphone className="w-4 h-4" /> Announcements</TabsTrigger>
           <TabsTrigger value="feedback" className="gap-2"><MessageSquare className="w-4 h-4" /> Feedback</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="timetable" className="m-0">
+          <ClassTimetableView classId={classIdNum} />
+        </TabsContent>
 
         <TabsContent value="exams" className="m-0 space-y-4">
           {examsLoading ? (
@@ -403,7 +434,7 @@ function StudentFeedback({ classId, exams }: { classId: number, exams: any[] }) 
       setForm({ message: "", examId: "general" });
     },
     onError: (e: any) => {
-      toast({ title: "Submission Failed", description: e.message, variant: "destructive" });
+      toast({ title: "Submission Failed", description: apiErrorMessage(e), variant: "destructive" });
     },
     onSettled: () => {
       setIsSubmitting(false);

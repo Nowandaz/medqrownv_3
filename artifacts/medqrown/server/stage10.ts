@@ -2,6 +2,7 @@ import type { Express, RequestHandler } from "express";
 import { pool } from "./db";
 import { analyzeExamQuestions } from "./ai-orchestrator";
 import { listCohorts, nairobiDate } from "./stage3-storage";
+import { groupedQueue } from "./stage5";
 
 const allowedPublicEvents = new Set(["page_view", "demo_start", "demo_complete", "signup_click"]);
 const allowedPages = new Set(["home", "demo", "signup", "waitlist", "classes", "other"]);
@@ -241,11 +242,11 @@ export function registerStage10Routes(app: Express, requireAdmin: RequestHandler
   app.get("/api/admin/dashboard", requireAdmin, async (_req, res) => {
     const cohorts = await listCohorts();
     const current = cohorts.current;
+    // Every membership counts, whichever cohort it was issued for (grace members belong to the previous one).
     const memberships = await pool.query(
       `SELECT m.student_id AS "studentId", m.start_date::text AS "startDate", m.end_date::text AS "endDate",
               (SELECT grace_days FROM medqrown_settings WHERE id = 1) AS "graceDays"
-         FROM medqrown_memberships m WHERE m.cohort_id = $1`,
-      [current?.id ?? -1],
+         FROM medqrown_memberships m`,
     );
     const today = nairobiDate();
     const activeMembers = memberships.rows.filter((m: any) => m.startDate <= today && m.endDate >= today).length;
@@ -254,11 +255,8 @@ export function registerStage10Routes(app: Express, requireAdmin: RequestHandler
       end.setUTCDate(end.getUTCDate() + Number(m.graceDays ?? 3));
       return m.endDate < today && end.toISOString().slice(0, 10) >= today;
     }).length;
-    const [payments, exams, feedback, nextPayments] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FILTER (WHERE status = 'pending')::int AS pending,
-                         COUNT(*) FILTER (WHERE status = 'pending' AND code IN
-                           (SELECT code FROM medqrown_payment_entries GROUP BY code HAVING COUNT(*) > 1))::int AS flagged
-                    FROM medqrown_payment_entries`),
+    const [queue, exams, feedback, nextPayments] = await Promise.all([
+      groupedQueue(),
       pool.query(`SELECT id, title, class_id AS "classId", opens_at AS "opensAt", closes_at AS "closesAt"
                     FROM exams WHERE status = 'active' AND opens_at >= CURRENT_TIMESTAMP
                     ORDER BY opens_at, id LIMIT 10`),
@@ -273,7 +271,8 @@ export function registerStage10Routes(app: Express, requireAdmin: RequestHandler
       currentCohort: current,
       activeMembers, graceMembers,
       pendingPayments: Number(nextPayments.rows[0]?.count || 0),
-      flaggedPayments: Number(payments.rows[0]?.flagged || 0),
+      // Same rule as Admin → Payments → Flagged: groups awaiting review that raised a flag.
+      flaggedPayments: queue.filter((group: any) => group.status === "Flagged").length,
       upcomingExams: exams.rows,
       latestFeedback: feedback.rows,
     });

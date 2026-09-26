@@ -332,10 +332,6 @@ export function InstitutionsPage() {
               <p className="text-muted-foreground text-xs leading-relaxed">{f.desc}</p>
             </div>
           ))}
-          <p className="text-muted-foreground text-xs px-1">
-            Already have admin access?{" "}
-            <Link href="/admin" className="text-primary hover:underline">Log in here</Link>.
-          </p>
         </div>
 
         <div className="md:col-span-3">

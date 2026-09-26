@@ -41,6 +41,19 @@ export async function updateStage9SiteSettings(input: Record<string, unknown>): 
       && input.googleFormUrl !== "" && !validGoogleFormUrl(input.googleFormUrl)) {
     throw Object.assign(new Error("googleFormUrl must be a valid HTTPS Google Forms link"), { status: 400 });
   }
+  for (const key of ["registrationOpensAt", "registrationClosesAt"]) {
+    if (!Object.prototype.hasOwnProperty.call(input, key)) continue;
+    const value = input[key];
+    if (value === null || value === "") { input[key] = null; continue; }
+    if (typeof value !== "string" || Number.isNaN(Date.parse(value))) {
+      throw Object.assign(new Error("Scheduled open/close times must be valid dates"), { status: 400 });
+    }
+    input[key] = new Date(value).toISOString();
+  }
+  if (input.registrationOpensAt && input.registrationClosesAt
+      && Date.parse(String(input.registrationClosesAt)) <= Date.parse(String(input.registrationOpensAt))) {
+    throw Object.assign(new Error("The closing time must be after the opening time"), { status: 400 });
+  }
   if (next.registrationOpen === true && !validGoogleFormUrl(next.googleFormUrl)) {
     throw Object.assign(new Error("A valid Google Form URL is required before opening registration"), { status: 400 });
   }
@@ -186,7 +199,7 @@ export function registerStage9Routes(app: Express, requireAdmin: RequestHandler)
   app.get("/api/admin/waitlist", requireAdmin, async (req, res) => {
     const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 250) : "";
     const { rows } = await pool.query(
-      `SELECT id, name, email, phone, invitation_email_sent_at AS "invitationEmailSentAt",
+      `SELECT id, name, email, phone, source, invitation_email_sent_at AS "invitationEmailSentAt",
               created_at AS "createdAt"
          FROM medqrown_waitlist
         WHERE ($1::text = '' OR name ILIKE '%' || $1 || '%' OR email ILIKE '%' || $1 || '%' OR phone ILIKE '%' || $1 || '%')
@@ -254,6 +267,28 @@ export function registerStage9Routes(app: Express, requireAdmin: RequestHandler)
     });
   });
 
+  /** Custom message to everyone on the waitlist ({student_name} is replaced per person). */
+  app.post("/api/admin/waitlist/email", requireAdmin, async (req, res) => {
+    const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
+    const body = typeof req.body?.body === "string" ? req.body.body.trim() : "";
+    if (!subject || subject.length > 300 || !body || body.length > 10000) {
+      return res.status(400).json({ message: "Write a subject (up to 300 characters) and a message." });
+    }
+    const { rows } = await pool.query("SELECT id, name, email FROM medqrown_waitlist ORDER BY id");
+    if (!Number.isInteger(req.body?.confirmedCount) || req.body.confirmedCount !== rows.length) {
+      return res.status(409).json({ message: "The waitlist changed. Check the number of recipients and confirm again.", count: rows.length });
+    }
+    let sent = 0;
+    for (const recipient of rows) {
+      const result = await sendLoggedEmail({
+        to: recipient.email, templateKey: "custom:waitlist_message",
+        subject, body, variables: { student_name: recipient.name },
+      });
+      if (result.status === "sent") sent++;
+    }
+    res.json({ recipients: rows.length, emailSent: sent, emailFailed: rows.length - sent });
+  });
+
   app.post("/api/demo/saq-submit", async (req, res) => {
     const examId = Number(req.body?.examId);
     const questionId = Number(req.body?.questionId);
@@ -287,4 +322,31 @@ export function registerStage9Routes(app: Express, requireAdmin: RequestHandler)
       markingPoints: rows[0].markingPoints || "",
     });
   });
+}
+
+/**
+ * Scheduled registration: opens / closes registration at the times set in Admin → Site.
+ * Opening goes through updateStage9SiteSettings, so the waitlist email is sent once as usual.
+ * Each schedule entry is cleared once applied, so a manual change afterwards sticks.
+ */
+export async function applyRegistrationSchedule(): Promise<void> {
+  const { rows } = await pool.query(
+    "SELECT key, value FROM site_settings WHERE key IN ('registrationOpen', 'registrationOpensAt', 'registrationClosesAt', 'googleFormUrl')",
+  );
+  const settings = Object.fromEntries(rows.map((row: any) => [row.key, row.value])) as Record<string, any>;
+  const now = Date.now();
+  const opensAt = settings.registrationOpensAt ? Date.parse(settings.registrationOpensAt) : NaN;
+  const closesAt = settings.registrationClosesAt ? Date.parse(settings.registrationClosesAt) : NaN;
+  if (!Number.isNaN(closesAt) && closesAt <= now) {
+    await updateStage9SiteSettings({ registrationOpen: false, registrationClosesAt: null,
+      ...(!Number.isNaN(opensAt) && opensAt <= now ? { registrationOpensAt: null } : {}) });
+    return;
+  }
+  if (!Number.isNaN(opensAt) && opensAt <= now) {
+    if (settings.registrationOpen !== true && validGoogleFormUrl(settings.googleFormUrl)) {
+      await updateStage9SiteSettings({ registrationOpen: true, registrationOpensAt: null });
+    } else {
+      await updateStage9SiteSettings({ registrationOpensAt: null });
+    }
+  }
 }

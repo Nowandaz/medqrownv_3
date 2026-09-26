@@ -109,6 +109,10 @@ export default function StudentInstructions() {
       icon: <Ban className="w-4 h-4 text-destructive" />,
       text: "You cannot go back to a previous question once you move on, even if you reload the page",
     },
+    {
+      icon: <ChevronRight className="w-4 h-4 text-primary" />,
+      text: "Choose your answer, then tap Next Question to continue. On the last question, tap Submit Exam",
+    },
     ...(isTimed
       ? [
           {
@@ -180,18 +184,21 @@ export default function StudentInstructions() {
                   <Badge variant="outline" className="text-xs">No time limit</Badge>
                 )}
                 <Badge variant="outline" className="text-xs">
-                  Attempt {info.attemptsUsed + 1} of {info.maxAttempts}
+                  Attempt {Math.min(info.attemptsUsed + 1, info.maxAttempts)} of {info.maxAttempts}
                 </Badge>
               </div>
 
               <Separator />
 
-              {hasCustomInstructions ? (
+              {hasCustomInstructions && (
                 <div className="space-y-2">
                   <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Instructions</p>
                   <p className="text-sm leading-relaxed whitespace-pre-wrap text-foreground">{info.instructions}</p>
+                  <Separator />
                 </div>
-              ) : (
+              )}
+              {/* The navigation and timer rules are always shown, even with custom instructions. */}
+              {(
                 <>
                   {timerRules.length > 0 && (
                     <div className="space-y-2.5">

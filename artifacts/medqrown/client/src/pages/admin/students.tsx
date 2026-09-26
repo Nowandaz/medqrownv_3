@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Users, Search, Edit2, Check, X } from "lucide-react";
+import { MembersTable } from "@/components/admin/members-table";
 
 export default function AdminStudents() {
   const [, setLocation] = useLocation();
@@ -40,7 +41,7 @@ export default function AdminStudents() {
   });
 
   useEffect(() => {
-    if (!adminLoading && !admin) setLocation("/admin");
+    if (!adminLoading && !admin) setLocation("/");
   }, [adminLoading, admin, setLocation]);
 
   if (adminLoading) return <div className="min-h-screen bg-background" />;
@@ -80,64 +81,9 @@ export default function AdminStudents() {
           </TabsList>
 
           <TabsContent value="all" className="m-0 space-y-4">
-            <div className="flex items-center gap-2 w-full sm:w-64">
-              <div className="relative w-full">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input 
-                  placeholder="Search students..." 
-                  value={search}
-                  onChange={e => setSearch(e.target.value)}
-                  className="pl-9"
-                />
-              </div>
-            </div>
-
             <Card>
               <CardContent className="p-0">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Student</TableHead>
-                      <TableHead>Contact</TableHead>
-                      <TableHead>Classes</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {studentsLoading ? (
-                      <TableRow>
-                        <TableCell colSpan={3} className="text-center py-8">
-                          <Skeleton className="h-6 w-full" />
-                        </TableCell>
-                      </TableRow>
-                    ) : !filtered.length ? (
-                      <TableRow>
-                        <TableCell colSpan={3} className="text-center py-12 text-muted-foreground">
-                          No students found.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      filtered.map((s) => (
-                        <TableRow key={s.id}>
-                          <TableCell className="font-medium">{s.name}</TableCell>
-                          <TableCell>
-                            <div className="text-sm">{s.email}</div>
-                            {s.phone && <div className="text-xs text-muted-foreground">{s.phone}</div>}
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex gap-1 flex-wrap">
-                              {s.classes?.map((c: any) => (
-                                <Badge key={c.id} variant="secondary" className="text-[10px]">
-                                  {c.name}
-                                </Badge>
-                              ))}
-                              {!s.classes?.length && <span className="text-xs text-muted-foreground">No classes</span>}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                <MembersTable />
               </CardContent>
             </Card>
           </TabsContent>

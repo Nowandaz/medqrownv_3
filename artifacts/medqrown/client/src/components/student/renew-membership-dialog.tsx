@@ -1,158 +1,120 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useRenewalStatus, usePaymentDetails, useSubmitRenewal } from "@/hooks/use-student";
-import { Copy, CheckCircle, AlertCircle, Loader2 } from "lucide-react";
+import { Copy, CheckCircle, Loader2, Users, User } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiErrorMessage } from "@/lib/api-error";
 
+const ksh = (value: number | undefined) => `KSh ${Number(value ?? 0).toLocaleString("en-KE")}`;
+
+function CopyField({ label, value, id, copied, onCopy }: { label: string; value: string; id: string; copied: string | null; onCopy: (v: string, id: string) => void }) {
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-lg bg-muted p-3">
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="font-mono font-semibold text-base break-all">{value}</p>
+      </div>
+      <Button type="button" variant="outline" size="sm" onClick={() => onCopy(value, id)} className="shrink-0">
+        {copied === id ? <><CheckCircle className="h-4 w-4 mr-1 text-green-600" />Copied</> : <><Copy className="h-4 w-4 mr-1" />Copy</>}
+      </Button>
+    </div>
+  );
+}
+
+/** Renew membership (master prompt §5.2): payment details, plan choice and the M-Pesa code. */
 export function RenewMembershipDialog({ trigger }: { trigger?: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [code, setCode] = useState("");
-  const [plan, setPlan] = useState<"individual" | "group">("individual");
-  
+  const [plan, setPlan] = useState<"Individual" | "Group">("Individual");
+  const queryClient = useQueryClient();
+
   const { data: status, isLoading: statusLoading } = useRenewalStatus();
   const { data: details, isLoading: detailsLoading } = usePaymentDetails();
   const submitRenewal = useSubmitRenewal();
   const { toast } = useToast();
 
-  const handleCopy = (text: string, field: string) => {
-    navigator.clipboard.writeText(text);
+  const handleCopy = async (text: string, field: string) => {
+    try { await navigator.clipboard.writeText(text); } catch { /* clipboard blocked: the value is still visible */ }
     setCopiedField(field);
     setTimeout(() => setCopiedField(null), 2000);
   };
 
+  const normalizedCode = code.replace(/\s+/g, "").toUpperCase();
+  const codeValid = /^[A-Z0-9]{10}$/.test(normalizedCode);
+
   const handleSubmit = () => {
-    const normalizedCode = code.replace(/\s+/g, "").toUpperCase();
-    if (normalizedCode.length !== 10) {
-      toast({ title: "Invalid Code", description: "Payment code must be exactly 10 characters.", variant: "destructive" });
-      return;
-    }
-    
     submitRenewal.mutate({ code: normalizedCode, plan }, {
       onSuccess: () => {
-        toast({ title: "Payment Submitted", description: "Your payment code is pending verification." });
+        toast({ title: "Payment submitted", description: "We'll verify it shortly and let you know by email." });
+        for (const key of ["/api/student/dashboard", "/api/student/profile", "/api/student/membership"]) {
+          queryClient.invalidateQueries({ queryKey: [key] });
+        }
         setOpen(false);
         setCode("");
       },
-      onError: (e: any) => {
-        toast({ title: "Submission Failed", description: e.message, variant: "destructive" });
-      }
+      onError: (e) => toast({ title: "Couldn't submit your code", description: apiErrorMessage(e), variant: "destructive" }),
     });
   };
 
-  if (statusLoading) return null;
-  if (!status?.available) return null;
+  if (statusLoading || !status?.available) return null;
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        {trigger || <Button variant="default" className="w-full">Renew Membership</Button>}
+        {trigger || <Button variant="default" className="w-full">Renew membership</Button>}
       </DialogTrigger>
-      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Renew Membership</DialogTitle>
-          <DialogDescription>
-            Follow the instructions below to renew your membership via M-Pesa.
-          </DialogDescription>
+          <DialogTitle>Renew membership</DialogTitle>
+          <DialogDescription>Pay via M-Pesa, then enter your transaction code below.</DialogDescription>
         </DialogHeader>
-        
+
         {detailsLoading ? (
-          <div className="flex justify-center p-8">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          </div>
+          <div className="flex justify-center p-8"><Loader2 className="h-8 w-8 animate-spin text-primary" /></div>
         ) : !details ? (
-          <div className="text-center p-4 text-destructive">Could not load payment details.</div>
+          <p className="text-center p-4 text-destructive text-sm">We couldn't load the payment details. Please refresh and try again.</p>
         ) : (
-          <div className="space-y-6 pt-4">
-            {status.message && (
-              <div className="bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-400 p-3 rounded-md text-sm flex items-start gap-2 border border-blue-200 dark:border-blue-900">
-                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                <p>{status.message}</p>
-              </div>
-            )}
-            
-            <div className="space-y-4 text-sm">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-3 bg-muted rounded-md relative group">
-                  <p className="text-xs text-muted-foreground mb-1">Paybill / Business No.</p>
-                  <p className="font-mono font-medium text-lg">{details.paybill}</p>
-                  <Button 
-                    variant="ghost" size="icon" className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => handleCopy(details.paybill, "paybill")}
-                  >
-                    {copiedField === "paybill" ? <CheckCircle className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-                
-                <div className="p-3 bg-muted rounded-md relative group">
-                  <p className="text-xs text-muted-foreground mb-1">Account No.</p>
-                  <p className="font-mono font-medium text-lg">{details.accountNumber}</p>
-                  <Button 
-                    variant="ghost" size="icon" className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => handleCopy(details.accountNumber, "account")}
-                  >
-                    {copiedField === "account" ? <CheckCircle className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-                </div>
-              </div>
-              
-              <div className="p-3 border rounded-md relative group flex flex-col gap-1">
-                 <p className="text-xs text-muted-foreground">Account Name / Bank</p>
-                 <p className="font-medium">{details.bankName}</p>
-              </div>
-              
-              <div className="p-3 bg-muted rounded-md relative group">
-                 <p className="text-xs text-muted-foreground mb-1">Important Note (Copy exactly)</p>
-                 <p className="font-mono text-xs break-words">{details.accountNote}</p>
-                 <Button 
-                    variant="ghost" size="icon" className="absolute top-2 right-2 h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                    onClick={() => handleCopy(details.accountNote, "note")}
-                  >
-                    {copiedField === "note" ? <CheckCircle className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-                  </Button>
-              </div>
-              
-              <div className="space-y-3 pt-2">
-                <Label>Select Plan</Label>
-                <Select value={plan} onValueChange={(v: "individual" | "group") => setPlan(v)}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="individual">Individual (KES {details.individualPrice})</SelectItem>
-                    <SelectItem value="group">Group of 4 (KES {details.groupPrice})</SelectItem>
-                  </SelectContent>
-                </Select>
-                
-                {plan === "group" && (
-                  <p className="text-xs text-muted-foreground bg-muted p-2 rounded">{details.groupInstructions}</p>
-                )}
-              </div>
-              
-              <div className="space-y-2 pt-2">
-                <Label>M-Pesa Transaction Code</Label>
-                <Input 
-                  placeholder="e.g. QAZ1234567" 
-                  value={code} 
-                  onChange={e => setCode(e.target.value.toUpperCase())}
-                  maxLength={15}
-                  className="font-mono uppercase"
-                />
-                <p className="text-xs text-muted-foreground">Enter the 10-character code from your M-Pesa confirmation message.</p>
-              </div>
-              
-              <Button 
-                className="w-full mt-4" 
-                onClick={handleSubmit} 
-                disabled={submitRenewal.isPending || code.replace(/\s+/g, "").length !== 10}
-              >
-                {submitRenewal.isPending ? "Submitting..." : "Submit Payment Code"}
-              </Button>
+          <div className="space-y-5">
+            <div className="space-y-2">
+              <p className="text-sm font-medium">1. Pay via M-Pesa (Lipa na M-Pesa → Paybill)</p>
+              <CopyField label="Paybill number" value={details.paybill} id="paybill" copied={copiedField} onCopy={handleCopy} />
+              <CopyField label="Account number" value={details.accountNumber} id="account" copied={copiedField} onCopy={handleCopy} />
+              <p className="text-xs text-muted-foreground">Bank: {details.bankName}. {details.accountNote}</p>
             </div>
+
+            <div className="space-y-2">
+              <p className="text-sm font-medium">2. Choose your plan</p>
+              <RadioGroup value={plan} onValueChange={(v) => setPlan(v as "Individual" | "Group")} className="grid grid-cols-2 gap-2">
+                <label htmlFor="plan-individual" className={`rounded-lg border p-3 cursor-pointer ${plan === "Individual" ? "border-primary bg-primary/5" : ""}`}>
+                  <div className="flex items-center gap-2"><RadioGroupItem value="Individual" id="plan-individual" /><User className="w-4 h-4" /><span className="font-medium text-sm">Individual</span></div>
+                  <p className="text-xs text-muted-foreground mt-1">{ksh(details.individualPrice)} / month</p>
+                </label>
+                <label htmlFor="plan-group" className={`rounded-lg border p-3 cursor-pointer ${plan === "Group" ? "border-primary bg-primary/5" : ""}`}>
+                  <div className="flex items-center gap-2"><RadioGroupItem value="Group" id="plan-group" /><Users className="w-4 h-4" /><span className="font-medium text-sm">Group of 4</span></div>
+                  <p className="text-xs text-muted-foreground mt-1">{ksh(details.groupPrice)} total ({ksh(Math.round(details.groupPrice / 4))} each)</p>
+                </label>
+              </RadioGroup>
+              {plan === "Group" && <p className="text-xs text-muted-foreground bg-muted p-2 rounded">{details.groupInstructions}</p>}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="mpesa-code" className="text-sm font-medium">3. Enter your M-Pesa code</Label>
+              <Input id="mpesa-code" placeholder="e.g. SJK4ABC123" value={code} maxLength={14} autoCapitalize="characters"
+                onChange={(e) => setCode(e.target.value.toUpperCase())} className="font-mono uppercase" />
+              <p className={`text-xs ${code && !codeValid ? "text-destructive" : "text-muted-foreground"}`}>
+                {code && !codeValid ? "M-Pesa codes are exactly 10 letters and numbers." : "It's the 10-character code at the start of your M-Pesa confirmation SMS."}
+              </p>
+            </div>
+
+            <Button className="w-full" onClick={handleSubmit} disabled={submitRenewal.isPending || !codeValid}>
+              {submitRenewal.isPending ? "Submitting..." : "Submit payment code"}
+            </Button>
           </div>
         )}
       </DialogContent>

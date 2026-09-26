@@ -24,6 +24,7 @@ import {
   SheetTrigger 
 } from "@/components/ui/sheet";
 import { FEATURES } from "@/lib/feature-flags";
+import { WelcomeTour } from "@/components/student/welcome-tour";
 
 const NAV_ITEMS = [
   { href: "/student/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -70,6 +71,7 @@ export function StudentShell({ children }: { children: React.ReactNode }) {
             key={item.href} 
             href={item.href}
             onClick={onClick}
+            data-tour={`nav-${item.href.split("/").pop()}`}
             className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
               isActive 
                 ? "bg-primary/10 text-primary" 
@@ -92,10 +94,10 @@ export function StudentShell({ children }: { children: React.ReactNode }) {
           <MedQrownBrand size="sm" />
         </Link>
         <div className="flex items-center gap-1">
-          <StudentNotifications />
+          <span data-tour="bell"><StudentNotifications /></span>
           <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
             <SheetTrigger asChild>
-              <Button variant="ghost" size="icon" className="md:hidden">
+              <Button variant="ghost" size="icon" className="md:hidden" data-tour="menu">
                 <Menu className="h-5 w-5" />
                 <span className="sr-only">Toggle menu</span>
               </Button>
@@ -135,7 +137,7 @@ export function StudentShell({ children }: { children: React.ReactNode }) {
           <Link href="/student/dashboard">
             <MedQrownBrand size="md" />
           </Link>
-          <StudentNotifications />
+          <span data-tour="bell"><StudentNotifications /></span>
         </div>
         <NavLinks />
         <div className="border-t p-4">
@@ -164,6 +166,7 @@ export function StudentShell({ children }: { children: React.ReactNode }) {
         <div className="mx-auto max-w-5xl p-4 md:p-8">
           <PushSubscriptionPrompt />
           {children}
+          <WelcomeTour user={user} />
         </div>
       </main>
     </div>

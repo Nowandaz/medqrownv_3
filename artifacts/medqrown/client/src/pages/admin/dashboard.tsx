@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { MessageSquare, Users, AlertCircle, CreditCard, Calendar, AlertTriangle } from "lucide-react";
 import { AdminNav } from "@/components/admin/admin-nav";
+import { cohortName, formatCalendarDate } from "@/lib/datetime";
 
 function AdminFeedbackWidget({ feedback }: { feedback: any[] }) {
   return (
@@ -56,7 +57,7 @@ export default function AdminDashboard() {
   });
 
   useEffect(() => {
-    if (!adminLoading && !admin) setLocation("/admin");
+    if (!adminLoading && !admin) setLocation("/");
   }, [adminLoading, admin, setLocation]);
 
   if (adminLoading || dashLoading) {
@@ -91,14 +92,14 @@ export default function AdminDashboard() {
               <div className="flex justify-between items-start">
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-muted-foreground">Current Cohort</p>
-                  <p className="text-2xl font-bold">{dashboard?.currentCohort?.name || "None"}</p>
+                  <p className="text-xl font-bold">{cohortName(dashboard?.currentCohort)}</p>
                 </div>
                 <div className="p-2 bg-primary/10 rounded-lg">
                   <Calendar className="w-5 h-5 text-primary" />
                 </div>
               </div>
               <div className="mt-4 text-xs text-muted-foreground">
-                {dashboard?.currentCohort?.startDate ? new Date(dashboard.currentCohort.startDate).toLocaleDateString() : "TBD"} - {dashboard?.currentCohort?.endDate ? new Date(dashboard.currentCohort.endDate).toLocaleDateString() : "TBD"}
+                {dashboard?.currentCohort ? (dashboard.currentCohort.startDate > new Date().toISOString().slice(0, 10) ? "Starts " + formatCalendarDate(dashboard.currentCohort.startDate) : "In progress") : "Not configured"}
               </div>
             </CardContent>
           </Card>

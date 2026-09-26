@@ -26,6 +26,9 @@ import {
 import { MedQrownBrand } from "@/components/MedQrownBrand";
 import { AnalyticsTab } from "@/components/admin/analytics-tab";
 import { TEXT_LIMITS } from "@/lib/text-limits";
+import { ExamTimerFields, type TimerMode } from "@/components/admin/exam-timer-fields";
+import { toNairobiInput } from "@/lib/datetime";
+import { apiErrorMessage } from "@/lib/api-error";
 
 export default function AdminExamDetail() {
   const [, params] = useRoute("/admin/exams/:id");
@@ -37,8 +40,7 @@ export default function AdminExamDetail() {
   const { data: exam, isLoading } = useQuery<any>({ queryKey: ["/api/exams", examId] });
   const { data: examStudents } = useQuery<any[]>({ queryKey: ["/api/exams", examId, "students"] });
   const { data: examQuestions } = useQuery<any[]>({ queryKey: ["/api/exams", examId, "questions"] });
-  const { data: rankings } = useQuery<any[]>({ queryKey: ["/api/exams", examId, "rankings"], enabled: activeTab === "rankings" });
-  const { data: analytics } = useQuery<any[]>({ queryKey: ["/api/exams", examId, "analytics"], enabled: activeTab === "analytics" });
+  const { data: rankings } = useQuery<any[]>({ queryKey: ["/api/exams", examId, "rankings"], enabled: activeTab === "results" });
   const { data: feedback } = useQuery<any[]>({
     queryKey: ["/api/exams", examId, "feedback"],
     refetchInterval: 30000,
@@ -152,7 +154,7 @@ export default function AdminExamDetail() {
           <TabsContent value="results">
             <div className="space-y-6">
               <RankingsTab rankings={rankings || []} examId={examId} />
-              <AnalyticsTab analytics={analytics || []} examId={examId} />
+              <AnalyticsTab examId={examId} />
             </div>
           </TabsContent>
           <TabsContent value="feedback">
@@ -355,7 +357,7 @@ function QuestionsTab({ examId, questions }: { examId: number; questions: any[] 
       setEditImageUrl(urlData.objectPath);
       toast({ title: "Image uploaded" });
     } catch (e: any) {
-      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: apiErrorMessage(e), variant: "destructive" });
     } finally {
       setEditUploading(false);
     }
@@ -379,7 +381,7 @@ function QuestionsTab({ examId, questions }: { examId: number; questions: any[] 
       setEditQ(null);
       toast({ title: "Question updated" });
     },
-    onError: (e: any) => toast({ title: "Update failed", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Update failed", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const uploadImage = async (file: File) => {
@@ -401,7 +403,7 @@ function QuestionsTab({ examId, questions }: { examId: number; questions: any[] 
       setImageUrl(urlData.objectPath);
       toast({ title: "Image uploaded" });
     } catch (e: any) {
-      toast({ title: "Upload failed", description: e.message, variant: "destructive" });
+      toast({ title: "Upload failed", description: apiErrorMessage(e), variant: "destructive" });
     } finally {
       setUploading(false);
     }
@@ -1076,7 +1078,7 @@ function FeedbackTab({ feedback, examId }: { feedback: any[]; examId: number }) 
       setDraftContent("");
       toast({ title: "Reply sent successfully" });
     },
-    onError: (e: any) => toast({ title: "Failed to send reply", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Failed to send reply", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const generateAiDraft = async (fb: any) => {
@@ -1087,7 +1089,7 @@ function FeedbackTab({ feedback, examId }: { feedback: any[]; examId: number }) 
       if (!res.ok) throw new Error(data.message || "AI failed");
       setDraftContent(data.draft || "");
     } catch (e: any) {
-      toast({ title: "AI draft failed", description: e.message, variant: "destructive" });
+      toast({ title: "AI draft failed", description: apiErrorMessage(e), variant: "destructive" });
     } finally {
       setGenerating(false);
     }
@@ -1280,7 +1282,7 @@ function MarkingTab({ examId, responses, stats }: { examId: number; responses: a
         }
       }
     } catch (e: any) {
-      toast({ title: "Marking failed", description: e.message, variant: "destructive" });
+      toast({ title: "Marking failed", description: apiErrorMessage(e), variant: "destructive" });
     } finally {
       setIsMarking(false);
       setMarkingStudentId(null);
@@ -1514,7 +1516,7 @@ function ReattemptsTab({ examId }: { examId: number }) {
       queryClient.invalidateQueries({ queryKey: ["/api/exams", examId, "reattempt-requests"] });
       toast({ title: "Reattempt request updated" });
     },
-    onError: (error: Error) => toast({ title: "Could not update request", description: error.message, variant: "destructive" }),
+    onError: (error: Error) => toast({ title: "Could not update request", description: apiErrorMessage(error), variant: "destructive" }),
   });
 
   return (
@@ -1556,18 +1558,22 @@ function ReattemptsTab({ examId }: { examId: number }) {
 function SetupTab({ exam, examId }: { exam: any; examId: number }) {
   const { toast } = useToast();
   const [maxAttempts, setMaxAttempts] = useState(exam.maxAttempts || 1);
-  const [durationMinutes, setDurationMinutes] = useState(exam.durationMinutes || 60);
-  const [opensAt, setOpensAt] = useState(exam.opensAt ? new Date(exam.opensAt).toISOString().slice(0, 16) : "");
-  const [closesAt, setClosesAt] = useState(exam.closesAt ? new Date(exam.closesAt).toISOString().slice(0, 16) : "");
+  const [durationMinutes, setDurationMinutes] = useState(exam.durationMinutes || 30);
+  const [timerMode, setTimerMode] = useState<TimerMode>(exam.timerMode === "per_question" ? "per_question" : "full_exam");
+  const [perQuestionSeconds, setPerQuestionSeconds] = useState(exam.perQuestionSeconds || 60);
+  // datetime-local inputs hold Nairobi wall-clock time; the server reads them as +03:00.
+  const [opensAt, setOpensAt] = useState(toNairobiInput(exam.opensAt));
+  const [closesAt, setClosesAt] = useState(toNairobiInput(exam.closesAt));
   const [instructions, setInstructions] = useState<string>(exam.instructions ?? "");
 
   const updateSetup = useMutation({
     mutationFn: async () => {
       await apiRequest("PATCH", `/api/exams/${examId}`, {
         maxAttempts,
-        durationMinutes,
-        opensAt: opensAt ? new Date(opensAt).toISOString() : undefined,
-        closesAt: closesAt ? new Date(closesAt).toISOString() : undefined,
+        timerMode,
+        ...(timerMode === "full_exam" ? { durationMinutes } : { perQuestionSeconds }),
+        opensAt: opensAt || undefined,
+        closesAt: closesAt || undefined,
         instructions: instructions.trim() || null
       });
     },
@@ -1576,7 +1582,7 @@ function SetupTab({ exam, examId }: { exam: any; examId: number }) {
       toast({ title: "Setup saved" });
     },
     onError: (e: any) => {
-      toast({ title: "Failed to save setup", description: e.message, variant: "destructive" });
+      toast({ title: "Failed to save setup", description: apiErrorMessage(e), variant: "destructive" });
     }
   });
 
@@ -1606,10 +1612,11 @@ function SetupTab({ exam, examId }: { exam: any; examId: number }) {
               onChange={(e) => setClosesAt(e.target.value)}
             />
           </div>
-          <div className="space-y-2">
-            <Label>Duration (Minutes)</Label>
-            <Input type="number" value={durationMinutes} onChange={(e) => setDurationMinutes(parseInt(e.target.value) || 60)} />
-          </div>
+          <ExamTimerFields
+            timerMode={timerMode} onTimerModeChange={setTimerMode}
+            durationMinutes={durationMinutes} onDurationMinutesChange={setDurationMinutes}
+            perQuestionSeconds={perQuestionSeconds} onPerQuestionSecondsChange={setPerQuestionSeconds}
+          />
           <div className="space-y-2">
             <Label>Maximum Attempts</Label>
             <Input

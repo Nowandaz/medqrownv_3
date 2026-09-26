@@ -9,6 +9,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { useToast } from "@/hooks/use-toast";
 import { MedQrownBrand } from "@/components/MedQrownBrand";
 import { Lock } from "lucide-react";
+import { apiErrorMessage } from "@/lib/api-error";
+import { PasswordFields, passwordsValid } from "@/components/password-fields";
 
 export default function StudentSetPassword() {
   const params = useParams<{ token: string }>();
@@ -37,7 +39,7 @@ export default function StudentSetPassword() {
       setLocation(data.redirectTo || "/portal");
     },
     onError: (e: any) => {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
+      toast({ title: "Couldn't set your password", description: apiErrorMessage(e), variant: "destructive" });
     },
   });
 
@@ -59,35 +61,15 @@ export default function StudentSetPassword() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="password">New Password</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm Password</Label>
-              <Input
-                id="confirmPassword"
-                type="password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm your password"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && password && confirmPassword) {
-                    setPasswordMutation.mutate();
-                  }
-                }}
-              />
-            </div>
+            <PasswordFields
+              password={password} confirm={confirmPassword}
+              onPasswordChange={setPassword} onConfirmChange={setConfirmPassword}
+              onSubmit={() => setPasswordMutation.mutate()}
+            />
             <Button 
               className="w-full mt-2" 
               onClick={() => setPasswordMutation.mutate()}
-              disabled={!password || !confirmPassword || setPasswordMutation.isPending}
+              disabled={!passwordsValid(password, confirmPassword) || setPasswordMutation.isPending}
             >
               {setPasswordMutation.isPending ? "Saving..." : "Set Password"}
             </Button>

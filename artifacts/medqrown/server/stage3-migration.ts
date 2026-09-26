@@ -85,5 +85,11 @@ export async function migrateStage3(): Promise<void> {
     INSERT INTO medqrown_cohorts (start_date, end_date)
     VALUES ('2026-09-28', '2026-10-27')
     ON CONFLICT (start_date) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS "session" (
+      "sid" varchar NOT NULL COLLATE "default" PRIMARY KEY,
+      "sess" json NOT NULL,
+      "expire" timestamp(6) NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
   `);
 }

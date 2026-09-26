@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AppHeader } from "@/components/AppHeader";
+import { apiErrorMessage } from "@/lib/api-error";
 import {
   Plus, Trash2, Edit, ChevronDown, ChevronUp, FlaskConical,
   CheckCircle, Circle, Clock, Image as ImageIcon, ArrowLeft, Eye, EyeOff
@@ -111,7 +112,7 @@ function QuestionForm({
       toast({ title: question ? "Question updated" : "Question added" });
       onClose();
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   return (

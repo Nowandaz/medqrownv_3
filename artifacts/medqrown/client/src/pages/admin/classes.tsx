@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
 import { Plus, Users, LayoutGrid, Calendar, ArrowRight } from "lucide-react";
+import { apiErrorMessage } from "@/lib/api-error";
 
 export default function AdminClasses() {
   const [, setLocation] = useLocation();
@@ -39,12 +40,12 @@ export default function AdminClasses() {
       toast({ title: "Class Created" });
     },
     onError: (e: any) => {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
+      toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" });
     }
   });
 
   useEffect(() => {
-    if (!adminLoading && !admin) setLocation("/admin");
+    if (!adminLoading && !admin) setLocation("/");
   }, [adminLoading, admin, setLocation]);
 
   if (adminLoading) return <div className="min-h-screen bg-background" />;

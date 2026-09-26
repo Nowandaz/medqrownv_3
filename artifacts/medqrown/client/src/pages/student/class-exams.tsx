@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { apiErrorMessage } from "@/lib/api-error";
 
 function UpcomingCountdown({ targetDate }: { targetDate: string }) {
   const [timeLeft, setTimeLeft] = useState("");
@@ -66,7 +67,7 @@ export default function StudentClassExams() {
       setLocation("/student/instructions");
     },
     onError: (error: any) => {
-      toast({ title: "Cannot start exam", description: error.message, variant: "destructive" });
+      toast({ title: "Cannot start exam", description: apiErrorMessage(error), variant: "destructive" });
     },
   });
 
@@ -84,7 +85,7 @@ export default function StudentClassExams() {
       toast({ title: "Reattempt requested successfully" });
     },
     onError: (error: any) => {
-      toast({ title: "Cannot request reattempt", description: error.message, variant: "destructive" });
+      toast({ title: "Cannot request reattempt", description: apiErrorMessage(error), variant: "destructive" });
     },
   });
 
@@ -309,7 +310,7 @@ function StudentFeedback({ classId, exams }: { classId: number, exams: any[] }) 
       setForm({ message: "", examId: "general" });
     },
     onError: (e: any) => {
-      toast({ title: "Submission Failed", description: e.message, variant: "destructive" });
+      toast({ title: "Submission Failed", description: apiErrorMessage(e), variant: "destructive" });
     }
   });
 

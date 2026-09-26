@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ArrowLeft, Check, ClipboardCheck, Globe2, Plus, ShieldCheck, X } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { FEATURES } from "@/lib/feature-flags";
+import { apiErrorMessage } from "@/lib/api-error";
 
 type Domain = { id: number; domain: string; label?: string; isActive: boolean };
 type Unit = { id: number; code: string; name: string; description?: string; isActive: boolean; enrolmentCount: number; examCount: number };
@@ -42,12 +43,12 @@ export default function AdminStudentAccess() {
   const addDomain = useMutation({
     mutationFn: () => request("POST", "/api/admin/allowed-domains", { domain, label }),
     onSuccess: () => { setDomain(""); setLabel(""); refresh(); toast({ title: "School email domain saved" }); },
-    onError: (error: Error) => toast({ title: "Could not save domain", description: error.message, variant: "destructive" }),
+    onError: (error: Error) => toast({ title: "Could not save domain", description: apiErrorMessage(error), variant: "destructive" }),
   });
   const addUnit = useMutation({
     mutationFn: () => request("POST", "/api/admin/units", { code: unitCode, name: unitName, description: unitDescription }),
     onSuccess: () => { setUnitCode(""); setUnitName(""); setUnitDescription(""); refresh(); toast({ title: "Unit created" }); },
-    onError: (error: Error) => toast({ title: "Could not create unit", description: error.message, variant: "destructive" }),
+    onError: (error: Error) => toast({ title: "Could not create unit", description: apiErrorMessage(error), variant: "destructive" }),
   });
   const changeExamUnit = useMutation({
     mutationFn: ({ examId, unitId }: { examId: number; unitId?: number }) => request("PATCH", `/api/admin/exams/${examId}/unit`, { unitId }),

@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { MedQrownBrand } from "@/components/MedQrownBrand";
 import { ArrowLeft, Search, Edit, History, AlertCircle } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { apiErrorMessage } from "@/lib/api-error";
 
 export default function AdminMemberships() {
   const [, setLocation] = useLocation();
@@ -165,7 +166,7 @@ function ManageMembershipTabs({ m, cohorts }: { m: any, cohorts: any }) {
       toast({ title: "Membership updated" });
       setForm({ ...form, reason: "" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const handleCohortChange = (val: string) => {

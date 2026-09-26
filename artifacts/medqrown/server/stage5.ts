@@ -1,9 +1,10 @@
 import type { Express, RequestHandler } from "express";
 import { pool } from "./db";
 import { ensureCurrentAndNextCohorts, cohortEndDate, isDate, nairobiDate } from "./stage3-storage";
-import { normalizeMpesaCode, validatePaymentCode } from "./stage4";
+import { insertInvite, inviteOrigin, normalizeMpesaCode, sendInvite, validatePaymentCode } from "./stage4";
 import { dispatchPushToStudents } from "./stage7";
 import { sendLoggedEmail } from "./stage11-email";
+import { publicSiteUrl } from "./site-url";
 
 type Queryable = { query: (sql: string, values?: unknown[]) => Promise<{ rows: any[]; rowCount?: number | null }> };
 type Plan = "Individual" | "Group";
@@ -71,7 +72,8 @@ async function nextCohortFor(db: Queryable, studentId: number): Promise<any> {
     || cohorts.find((item: any) => item.startDate > today)
     || cohorts[cohorts.length - 1];
   const daysLeft = daysBetween(today, current.endDate);
-  if (today < current.startDate || (daysLeft >= 0 && daysLeft <= 2)) {
+  // Before any cohort has started, the upcoming cohort counts as current (launch case).
+  if (today >= current.startDate && daysLeft >= 0 && daysLeft <= 2) {
     return cohorts.find((item: any) => item.startDate > current.endDate) || current;
   }
   return current;
@@ -127,7 +129,7 @@ async function memberCanRenew(studentId: number): Promise<{ allowed: boolean; me
   return { allowed: true };
 }
 
-async function groupedQueue(statusFilter?: string) {
+export async function groupedQueue(statusFilter?: string) {
   const today = nairobiDate();
   const result = await pool.query(
     `SELECT UPPER(REGEXP_REPLACE(p.code, '[[:space:]]', '', 'g')) AS code,
@@ -165,16 +167,18 @@ async function groupedQueue(statusFilter?: string) {
       studentId: Number(entry.studentId),
       id: Number(entry.id),
     }));
-    const plans = [...new Set(entries.map((entry: any) => entry.plan))];
+    // Rejected entries stay visible but do not count towards the code's usage.
+    const active = entries.filter((entry: any) => entry.status !== "rejected");
+    const plans = [...new Set(active.map((entry: any) => entry.plan))];
     const pending = entries.filter((entry: any) => entry.status === "pending");
     const flags: string[] = [];
     if (plans.length > 1) flags.push("Mixed plans for the same M-Pesa code");
-    if (plans.includes("Individual") && entries.length > 1) flags.push("Individual code has more than one entry");
-    if (plans.includes("Group") && pending.length && entries.length < 4
+    if (plans.includes("Individual") && active.length > 1) flags.push("Individual code has more than one entry");
+    if (plans.includes("Group") && pending.length && active.length < 4
         && now - new Date(group.first_created_at).getTime() >= 48 * 60 * 60 * 1000) {
       flags.push("Group incomplete for at least 48 hours");
     }
-    if (entries.length > (plans.includes("Individual") ? 1 : 4)) flags.push("Code usage exceeds plan limit");
+    if (active.length > (plans.includes("Individual") ? 1 : 4)) flags.push("Code usage exceeds plan limit");
     const status = flags.length && pending.length ? "Flagged"
       : pending.length ? "Pending"
         : entries.every((entry: any) => entry.status === "paid") ? "Approved"
@@ -188,7 +192,7 @@ async function groupedQueue(statusFilter?: string) {
       expectedAmount: entries[0]?.plan === "Group" ? entries[0]?.amount : entries[0]?.amount,
       sources: [...new Set(entries.map((entry: any) => entry.source))],
       firstSubmittedAt: group.first_created_at,
-      completeness: { count: entries.length, required: plans.includes("Group") ? 4 : 1 },
+      completeness: { count: active.length, required: plans.includes("Group") ? 4 : 1 },
       entries,
     };
   });
@@ -322,6 +326,7 @@ export function registerStage5Routes(app: Express, requireAdmin: RequestHandler,
         `SELECT plan, COUNT(*)::int AS count, BOOL_OR(student_id = $2) AS used_by_student
            FROM medqrown_payment_entries
           WHERE UPPER(REGEXP_REPLACE(code, '[[:space:]]', '', 'g')) = $1 AND id <> $3
+            AND status <> 'rejected'
           GROUP BY plan`,
         [newCode, entry.student_id, entryId],
       );
@@ -365,6 +370,7 @@ export function registerStage5Routes(app: Express, requireAdmin: RequestHandler,
     await ensureCurrentAndNextCohorts();
     const client = await pool.connect();
     const notifications: { id: number; endDate: string }[] = [];
+    const invites: { id: number; token: string }[] = [];
     try {
       await client.query("BEGIN");
       const selected = await client.query(
@@ -392,6 +398,9 @@ export function registerStage5Routes(app: Express, requireAdmin: RequestHandler,
             url: "/student/dashboard",
           } });
         notifications.push({ id: Number(entry.studentId), endDate: membership.endDate });
+        // New students uploaded as unverified have no account yet: issue their invite on approval.
+        const account = await client.query("SELECT 1 FROM student_accounts WHERE student_id = $1", [entry.studentId]);
+        if (!account.rows[0]) invites.push({ id: Number(entry.studentId), token: await insertInvite(client, Number(entry.studentId)) });
       }
       await client.query("COMMIT");
     } catch (error) {
@@ -408,6 +417,8 @@ export function registerStage5Routes(app: Express, requireAdmin: RequestHandler,
           to: email, templateKey: "payment_approved",
           variables: { student_name: name, cohort_end: item.endDate },
         });
+        const invite = invites.find((candidate) => candidate.id === item.id);
+        if (invite) await sendInvite(email, name, invite.token, inviteOrigin(req));
       }
     }
     const pushSent = await dispatchPushToStudents(notifications.map((item) => item.id), {
@@ -534,8 +545,8 @@ export async function sendDueRenewalReminders(): Promise<void> {
     const savingsMessage = candidate.lastPlan === "Individual"
       ? ` MedEazy is cheaper with friends! Join with 3 friends and save about ${percent}% (KSh ${Math.round(savings)} each per month).`
       : "";
-    const renewUrl = `${(process.env.APP_URL || process.env.PUBLIC_URL || "").replace(/\/$/, "")}/student/dashboard`;
-    const feedbackUrl = `${(process.env.APP_URL || process.env.PUBLIC_URL || "").replace(/\/$/, "")}/student/feedback`;
+    const renewUrl = `${publicSiteUrl()}/student/dashboard`;
+    const feedbackUrl = `${publicSiteUrl()}/student/my-class`;
     const body = `Your membership ends ${candidate.endDate}. Paybill ${candidate.paybill}, account ${candidate.accountNumber} (${candidate.bankName}). Renew: ${renewUrl}. Leave feedback: ${feedbackUrl}.${savingsMessage}`;
     await saveNotification(pool, Number(candidate.studentId), "membership_renewal_reminder",
       `Membership ends in ${days} day${days === 1 ? "" : "s"}`, body, {

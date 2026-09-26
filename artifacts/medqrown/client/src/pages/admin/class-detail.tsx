@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
@@ -20,6 +20,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { AdminNav } from "@/components/admin/admin-nav";
 import { Skeleton } from "@/components/ui/skeleton";
+import { MembersTable } from "@/components/admin/members-table";
+import { CreateExamDialog } from "@/components/admin/create-exam-dialog";
+import { apiErrorMessage } from "@/lib/api-error";
+import { ClassTimetable } from "@/components/admin/class-timetable";
 
 export default function AdminClassDetail() {
   const { id } = useParams<{ id: string }>();
@@ -47,7 +51,7 @@ export default function AdminClassDetail() {
       queryClient.invalidateQueries({ queryKey: [`/api/admin/classes/${classId}/members`] });
       toast({ title: "Invite Resent", description: "A new invite link has been generated." });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   if (adminLoading) return null;
@@ -72,6 +76,7 @@ export default function AdminClassDetail() {
               <TabsTrigger value="overview" className="gap-2"><Eye className="w-4 h-4" /> Overview</TabsTrigger>
               <TabsTrigger value="members" className="gap-2"><UserPlus className="w-4 h-4" /> Members</TabsTrigger>
               <TabsTrigger value="exams" className="gap-2"><BookOpen className="w-4 h-4" /> Exams</TabsTrigger>
+              <TabsTrigger value="timetable" className="gap-2"><Calendar className="w-4 h-4" /> Timetable</TabsTrigger>
               <TabsTrigger value="announcements" className="gap-2"><Megaphone className="w-4 h-4" /> Announcements</TabsTrigger>
               <TabsTrigger value="feedback" className="gap-2"><MessageSquare className="w-4 h-4" /> Feedback</TabsTrigger>
               <TabsTrigger value="emails" className="gap-2"><Mail className="w-4 h-4" /> Emails</TabsTrigger>
@@ -89,74 +94,17 @@ export default function AdminClassDetail() {
           <TabsContent value="members" className="space-y-4 m-0">
             <Card>
               <CardContent className="p-0">
-                <div className="flex justify-between p-4 border-b">
-                  <div className="font-medium">Master Member Database</div>
-                  <div className="flex gap-2">
-                    <Button variant="outline" size="sm"><Download className="w-4 h-4 mr-2" /> Export CSV</Button>
-                  </div>
-                </div>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Student</TableHead>
-                      <TableHead>Contact</TableHead>
-                      <TableHead>Membership</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {isLoadingMembers ? (
-                      <TableRow>
-                        <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Loading members...</TableCell>
-                      </TableRow>
-                    ) : members?.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No members in this class yet.</TableCell>
-                      </TableRow>
-                    ) : (
-                      members?.map((member) => (
-                        <TableRow key={member.id}>
-                          <TableCell>
-                            <div className="font-medium">{member.name}</div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="text-sm">{member.email}</div>
-                            {member.phone && <div className="text-xs text-muted-foreground">{member.phone}</div>}
-                          </TableCell>
-                          <TableCell>
-                            <div className="text-sm capitalize">{member.plan || "Complimentary"}</div>
-                            {member.membershipEndDate && (
-                              <div className="text-xs text-muted-foreground">Until {new Date(member.membershipEndDate).toLocaleDateString()}</div>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {member.inviteStatus === "activated" ? (
-                              <Badge variant="default" className="bg-green-500/10 text-green-700 hover:bg-green-500/20 border-green-200">Activated</Badge>
-                            ) : member.inviteStatus === "invited-not-activated" ? (
-                              <Badge variant="outline" className="border-amber-200 text-amber-700 bg-amber-50">Invited</Badge>
-                            ) : (
-                              <Badge variant="secondary">Pending</Badge>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {member.inviteStatus === "invited-not-activated" && (
-                              <Button variant="ghost" size="sm" onClick={() => resendInvite.mutate(member.id)} disabled={resendInvite.isPending}>
-                                <Mail className="w-4 h-4 mr-2" /> Resend
-                              </Button>
-                            )}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
+                <MembersTable classId={classId} />
               </CardContent>
             </Card>
           </TabsContent>
 
           <TabsContent value="exams" className="m-0">
             <ClassExams classId={classId} />
+          </TabsContent>
+
+          <TabsContent value="timetable" className="m-0">
+            <ClassTimetable classId={classId} />
           </TabsContent>
 
           <TabsContent value="announcements" className="m-0">
@@ -259,9 +207,7 @@ function ClassExams({ classId }: { classId: number }) {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h3 className="text-lg font-medium">Class Exams</h3>
-        <Link href={`/admin/dashboard`}>
-          <Button><Plus className="w-4 h-4 mr-2" />Create Exam</Button>
-        </Link>
+        <CreateExamDialog classId={classId} />
       </div>
       
       {isLoading ? (
@@ -280,7 +226,7 @@ function ClassExams({ classId }: { classId: number }) {
               </CardHeader>
               <CardContent>
                 <div className="flex justify-between items-center">
-                  <span className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3"/> {exam.durationMinutes || "No timer"} min</span>
+                  <span className="text-xs text-muted-foreground flex items-center gap-1"><Clock className="w-3 h-3"/> {exam.timerMode === "per_question" ? `${exam.perQuestionSeconds}s per question` : `${exam.durationMinutes ?? "—"} min`}</span>
                   <Link href={`/admin/exams/${exam.id}`}>
                     <Button variant="outline" size="sm">Manage Exam</Button>
                   </Link>
@@ -558,7 +504,7 @@ function AddStudentDialog({ classId }: { classId: number }) {
       toast({ title: "Student Added", description: "The student has been added to the class." });
       setForm({ fullName: "", email: "", phone: "", code: "", plan: "Individual", verified: true, note: "", endDate: "" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   return (
@@ -668,7 +614,7 @@ function ImportCsvDialog({ classId }: { classId: number }) {
       setVerified(data.verifiedDefault ?? true);
       setStep(2);
     },
-    onError: (e: any) => toast({ title: "Preview Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Preview Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const confirmMutation = useMutation({
@@ -692,7 +638,7 @@ function ImportCsvDialog({ classId }: { classId: number }) {
       
       handleClose();
     },
-    onError: (e: any) => toast({ title: "Import Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Import Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -872,7 +818,7 @@ function ClassAnnouncements({ classId }: { classId: number }) {
       setForm({ title: "", message: "", link: "" });
       setEditingId(null);
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const deleteAnnouncement = useMutation({
@@ -884,7 +830,7 @@ function ClassAnnouncements({ classId }: { classId: number }) {
       queryClient.invalidateQueries({ queryKey: [`/api/admin/classes/${classId}/announcements`] });
       toast({ title: "Announcement Deleted" });
     },
-    onError: (e: any) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+    onError: (e: any) => toast({ title: "Error", description: apiErrorMessage(e), variant: "destructive" }),
   });
 
   const handleEdit = (ann: any) => {

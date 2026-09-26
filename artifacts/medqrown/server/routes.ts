@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import session from "express-session";
+import connectPgSimple from "connect-pg-simple";
 import { storage } from "./storage";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
@@ -18,6 +19,7 @@ import { registerStage8Routes } from "./stage8";
 import { registerStage9Routes, updateStage9SiteSettings } from "./stage9";
 import { registerStage10Routes } from "./stage10";
 import { registerStage11Routes } from "./stage11";
+import { registerTimetableRoutes } from "./timetable";
 import { sendLoggedEmail } from "./stage11-email";
 import { broadcastLiveQuiz, issueLiveQuizTicket } from "./live-quiz";
 import { featureForPath, isFeatureEnabled } from "./feature-flags";
@@ -93,8 +95,12 @@ export async function registerRoutes(
     app.set("trust proxy", 1);
   }
 
+  // Sessions live in Postgres so logins (and in-progress exams) survive restarts and redeploys.
+  // The "session" table is created by migrateStage3().
+  const PgSessionStore = connectPgSimple(session);
   app.use(
     session({
+      store: new PgSessionStore({ pool, tableName: "session", createTableIfMissing: false, pruneSessionInterval: 60 * 60 }),
       secret: process.env.SESSION_SECRET || "medqrown-secret-key",
       resave: false,
       saveUninitialized: false,
@@ -351,9 +357,9 @@ export async function registerRoutes(
       }
       const normalizedEmail = (email || "").trim().toLowerCase();
       const admin = await storage.getAdminByEmail(normalizedEmail);
-      if (!admin) return res.status(401).json({ message: "Invalid credentials" });
+      if (!admin) return res.status(401).json({ message: "Incorrect email or password." });
       const valid = await bcrypt.compare(password, admin.passwordHash);
-      if (!valid) return res.status(401).json({ message: "Invalid credentials" });
+      if (!valid) return res.status(401).json({ message: "Incorrect email or password." });
       (req.session as any).adminId = admin.id;
       res.json({ id: admin.id, email: admin.email, name: admin.name, role: admin.role });
     } catch (error) {
@@ -417,6 +423,7 @@ export async function registerRoutes(
   registerStage9Routes(app, requireAdmin);
   registerStage10Routes(app, requireAdmin);
   registerStage11Routes(app, requireAdmin);
+  registerTimetableRoutes(app, requireAdmin, requireStudent);
   registerStage4Routes(app, requireAdmin);
 
   // ── Stage 3: global cohorts, membership, classes, pricing and payments ─────
@@ -797,6 +804,8 @@ export async function registerRoutes(
                 WHERE rr.exam_id = e.id AND rr.student_id = $2
                   AND rr.status = 'approved' AND rr.consumed_at IS NULL
                 ORDER BY rr.reviewed_at DESC NULLS LAST, rr.created_at DESC LIMIT 1) AS "approvedRequestId",
+              (SELECT COUNT(*)::int FROM exam_reattempt_requests rr
+                WHERE rr.exam_id = e.id AND rr.student_id = $2 AND rr.status = 'approved') AS "approvedReattempts",
               (SELECT rr.status FROM exam_reattempt_requests rr
                 WHERE rr.exam_id = e.id AND rr.student_id = $2 AND rr.status = 'pending'
                 ORDER BY rr.created_at DESC LIMIT 1) AS "pendingRequestStatus"
@@ -808,6 +817,7 @@ export async function registerRoutes(
       submittedAttempts: number;
       hasInProgressAttempt: boolean;
       approvedRequestId: number | null;
+      approvedReattempts: number;
       pendingRequestStatus: string | null;
     } | undefined;
   };
@@ -815,7 +825,8 @@ export async function registerRoutes(
   const studentExamAccess = async (examId: number, studentId: number) => {
     const { rows } = await pool.query(
       `SELECT id, class_id AS "classId", opens_at AS "opensAt", closes_at AS "closesAt",
-              duration_minutes AS "durationMinutes", status
+              duration_minutes AS "durationMinutes", timer_mode AS "timerMode",
+              per_question_seconds AS "perQuestionSeconds", status
          FROM exams WHERE id = $1`,
       [examId],
     );
@@ -833,7 +844,9 @@ export async function registerRoutes(
       return { allowed: false, status: 403, message: "Renew to access this exam", code: "MEMBERSHIP_EXPIRED" };
     }
     const now = Date.now();
-    if (!exam.opensAt || !exam.closesAt || !exam.durationMinutes) {
+    // Timed either for the whole exam (duration) or per question.
+    const timed = exam.timerMode === "per_question" ? Number(exam.perQuestionSeconds) > 0 : Number(exam.durationMinutes) > 0;
+    if (!exam.opensAt || !exam.closesAt || !timed) {
       return { allowed: false, status: 403, message: "The exam schedule is incomplete" };
     }
     if (new Date(exam.opensAt).getTime() > now) {
@@ -899,11 +912,16 @@ export async function registerRoutes(
     const classId = Number(req.body?.classId);
     const opensAt = parseNairobiExamTime(req.body?.opensAt);
     const closesAt = parseNairobiExamTime(req.body?.closesAt);
-    const durationMinutes = Number(req.body?.durationMinutes);
+    const timerMode = req.body?.timerMode === "per_question" ? "per_question" : "full_exam";
+    const perQuestionSeconds = timerMode === "per_question" ? Number(req.body?.perQuestionSeconds) : null;
+    const durationMinutes = timerMode === "full_exam" ? Number(req.body?.durationMinutes) : null;
     const maxAttempts = req.body?.maxAttempts === undefined ? 1 : Number(req.body.maxAttempts);
+    if (timerMode === "per_question" && (!Number.isInteger(perQuestionSeconds) || perQuestionSeconds! < 10 || perQuestionSeconds! > 3600)) {
+      return res.status(400).json({ message: "Time per question must be between 10 and 3600 seconds" });
+    }
     if (!title || title.length > 250 || !Number.isInteger(classId) || classId < 1
         || !opensAt || !closesAt || opensAt >= closesAt
-        || !Number.isInteger(durationMinutes) || durationMinutes < 1 || durationMinutes > 1440
+        || (timerMode === "full_exam" && (!Number.isInteger(durationMinutes) || durationMinutes! < 1 || durationMinutes! > 1440))
         || !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 100
         || (req.body?.status !== undefined && !["draft", "active", "archived"].includes(req.body.status))
         || (req.body?.instructions !== undefined && req.body.instructions !== null && typeof req.body.instructions !== "string")
@@ -924,8 +942,10 @@ export async function registerRoutes(
       closesAt,
       durationMinutes,
       maxAttempts,
-      fullExamSeconds: durationMinutes * 60,
-      timerMode: "full_exam",
+      // Per-question exams are limited by the per-question timer and the close time only.
+      fullExamSeconds: durationMinutes ? durationMinutes * 60 : null,
+      perQuestionSeconds,
+      timerMode,
       instructions: typeof req.body?.instructions === "string" ? req.body.instructions.trim() || null : null,
       autoMarkEnabled: req.body?.autoMarkEnabled ?? true,
       status: req.body?.status ?? "draft",
@@ -969,13 +989,27 @@ export async function registerRoutes(
         (!finalOpensAt || !finalClosesAt || new Date(finalOpensAt).getTime() >= new Date(finalClosesAt).getTime())) {
       return res.status(400).json({ message: "closesAt must be after opensAt" });
     }
-    if (updates.durationMinutes !== undefined) {
-      updates.durationMinutes = Number(updates.durationMinutes);
+    if (updates.timerMode !== undefined && !["full_exam", "per_question"].includes(updates.timerMode)) {
+      return res.status(400).json({ message: "timerMode must be full_exam or per_question" });
+    }
+    const nextTimerMode = updates.timerMode ?? current.timerMode;
+    if (nextTimerMode === "per_question") {
+      const seconds = Number(updates.perQuestionSeconds ?? current.perQuestionSeconds);
+      if (!Number.isInteger(seconds) || seconds < 10 || seconds > 3600) {
+        return res.status(400).json({ message: "Time per question must be between 10 and 3600 seconds" });
+      }
+      updates.timerMode = "per_question";
+      updates.perQuestionSeconds = seconds;
+      updates.durationMinutes = null;
+      updates.fullExamSeconds = null;
+    } else if (updates.durationMinutes !== undefined || updates.timerMode === "full_exam") {
+      updates.durationMinutes = Number(updates.durationMinutes ?? current.durationMinutes);
       if (!Number.isInteger(updates.durationMinutes) || updates.durationMinutes < 1 || updates.durationMinutes > 1440) {
-        return res.status(400).json({ message: "durationMinutes must be a whole number from 1 to 1440" });
+        return res.status(400).json({ message: "Duration must be a whole number of minutes from 1 to 1440" });
       }
       updates.fullExamSeconds = updates.durationMinutes * 60;
       updates.timerMode = "full_exam";
+      delete updates.perQuestionSeconds;
     }
     if (updates.instructions !== undefined && updates.instructions !== null && typeof updates.instructions !== "string") {
       return res.status(400).json({ message: "instructions must be a string or null" });
@@ -1747,10 +1781,17 @@ export async function registerRoutes(
 
   app.get("/api/student/me", requireStudent, async (req: any, res) => {
     const { rows } = await pool.query(
-      "SELECT id, name, email, university, avatar_key AS \"avatarKey\" FROM students WHERE id = $1",
+      `SELECT id, name, email, university, avatar_key AS "avatarKey", onboarded_at AS "onboardedAt"
+         FROM students WHERE id = $1`,
       [req.student.id],
     );
     res.json(rows[0]);
+  });
+
+  // First-login walkthrough: shown until the student finishes (or skips) it once.
+  app.post("/api/student/onboarding/complete", requireStudent, async (req: any, res) => {
+    await pool.query("UPDATE students SET onboarded_at = COALESCE(onboarded_at, CURRENT_TIMESTAMP) WHERE id = $1", [req.student.id]);
+    res.json({ ok: true });
   });
 
   app.get("/api/student/dashboard", requireStudent, async (req: any, res) => {
@@ -3216,7 +3257,7 @@ export async function registerRoutes(
     const avatarKey = req.body?.avatarKey;
     const legacyAvatarKeys = ["teal", "navy", "violet", "amber", "rose", "forest"];
     const isGalleryAvatar = typeof avatarKey === "string"
-      && /^(adventurer|fun-emoji|open-peeps):[A-Za-z0-9_-]+$/.test(avatarKey);
+      && /^(adventurer|lorelei|notionists|big-smile|avataaars|micah|personas|open-peeps|fun-emoji|pixel-art|bottts|thumbs):[A-Za-z0-9_-]+$/.test(avatarKey);
     if (!legacyAvatarKeys.includes(avatarKey) && !isGalleryAvatar) {
       return res.status(400).json({ message: "Choose an avatar from the available collection" });
     }
@@ -3266,8 +3307,21 @@ export async function registerRoutes(
       [normalizedEmail],
     );
     const account = rows[0];
-    if (!account || !account.isActive || !(await bcrypt.compare(password, account.passwordHash))) {
-      return res.status(401).json({ message: "Invalid email or password" });
+    if (!account) {
+      // Invite-only accounts: say whether the email is unknown or just not activated yet.
+      const { rows: pending } = await pool.query("SELECT 1 FROM students WHERE LOWER(email) = $1", [normalizedEmail]);
+      return res.status(401).json({
+        code: pending[0] ? "NOT_ACTIVATED" : "NO_ACCOUNT",
+        message: pending[0]
+          ? "Your account isn't activated yet. Use the set-password link in your invite email (check Spam), or ask us to resend it."
+          : "We couldn't find an account with that email. Check the spelling, or use the email you registered with.",
+      });
+    }
+    if (!account.isActive) {
+      return res.status(403).json({ code: "DISABLED", message: "This account has been disabled. Please contact us on WhatsApp or email." });
+    }
+    if (!(await bcrypt.compare(password, account.passwordHash))) {
+      return res.status(401).json({ code: "WRONG_PASSWORD", message: "Incorrect password. Try again, or tap \"Forgot password?\" to reset it." });
     }
     (req.session as any).studentId = account.studentId;
     delete (req.session as any).examStudentId;
@@ -3330,7 +3384,8 @@ export async function registerRoutes(
       mcqCount,
       saqCount,
       attemptStatus: es.attemptStatus,
-      maxAttempts: entitlement?.maxAttempts ?? exam.maxAttempts,
+      // Approved reattempts extend the allowance, so "Attempt N of M" never exceeds M.
+      maxAttempts: (entitlement?.maxAttempts ?? exam.maxAttempts ?? 1) + (entitlement?.approvedReattempts ?? 0),
       attemptsUsed: entitlement?.submittedAttempts ?? 0,
       instructions: exam.instructions ?? null,
     });
@@ -3469,6 +3524,7 @@ export async function registerRoutes(
       questionData = {
         ...currentQ,
         expectedAnswer: undefined,
+        explanation: undefined, // never reveal explanations before results are released
         options: options.map(o => ({ id: o.id, content: o.content, orderIndex: o.orderIndex })),
         subquestions: subs.map(s => ({ id: s.id, content: s.content, marks: s.marks, orderIndex: s.orderIndex })),
         savedAnswer: existingResponse?.answer || null,
@@ -3503,6 +3559,8 @@ export async function registerRoutes(
       questionStartedAt: attempt.questionStartedAt?.toISOString() ?? null,
       startedAt: attempt.startedAt?.toISOString() ?? null,
       deadlineAt: deadlineAt?.toISOString() ?? null,
+      // Lets the client correct for a wrong device clock when counting down to deadlineAt.
+      serverNow: new Date().toISOString(),
       question: questionData,
       upcomingImageUrl,
     });
@@ -3618,6 +3676,7 @@ export async function registerRoutes(
     const questionData: any = {
       ...nextQ,
       expectedAnswer: undefined,
+      explanation: undefined, // never reveal explanations before results are released
       options: options.map(o => ({ id: o.id, content: o.content, orderIndex: o.orderIndex })),
       subquestions: subs.map(s => ({ id: s.id, content: s.content, marks: s.marks, orderIndex: s.orderIndex })),
       savedAnswer: existingResponse?.answer || null,
@@ -4862,7 +4921,7 @@ export async function registerRoutes(
           }
         } else if (a.timerMode === "per_question" && a.perQuestionSeconds && a.questionStartedAt) {
           const elapsed = (now - new Date(a.questionStartedAt).getTime()) / 1000;
-          if (elapsed >= a.perQuestionSeconds) {
+          if (elapsed >= a.perQuestionSeconds + 5) {
             const qs = await storage.getQuestionsByExam(a.examId);
             if (a.currentQuestionIndex >= qs.length - 1) {
               await storage.updateAttempt(a.attemptId, { status: "submitted", submittedAt: new Date() });
@@ -4880,7 +4939,7 @@ export async function registerRoutes(
     } catch (err: any) {
       console.error("Auto-submit check error:", err.message);
     }
-  }, 30000);
+  }, 10000);
   httpServer.on("close", () => clearInterval(autoSubmitCheck));
 
   return httpServer;

@@ -66,6 +66,30 @@ export function registerStage11Routes(app: Express, requireAdmin: RequestHandler
     res.json({ items: rows, page, pageSize, total: count.rows[0]?.total ?? 0 });
   });
 
+  app.delete("/api/admin/settings/email-log/:id", requireAdmin, async (req, res) => {
+    const { rowCount } = await pool.query("DELETE FROM medqrown_email_log WHERE id = $1", [Number(req.params.id)]);
+    if (!rowCount) return res.status(404).json({ message: "Log entry not found" });
+    res.json({ deleted: rowCount });
+  });
+
+  /** Deletes every log entry matching the same filters as the list (all entries when none are given). */
+  app.delete("/api/admin/settings/email-log", requireAdmin, async (req: any, res) => {
+    const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 254) : "";
+    const templateKey = typeof req.query.templateKey === "string" ? req.query.templateKey.trim() : "";
+    const status = typeof req.query.status === "string" ? req.query.status : "";
+    if (status && !["sent", "failed"].includes(status)) return res.status(400).json({ message: "status must be sent or failed" });
+    const { rowCount } = await pool.query(
+      `DELETE FROM medqrown_email_log
+        WHERE ($1 = '' OR recipient ILIKE '%' || $1 || '%' OR template_key ILIKE '%' || $1 || '%')
+          AND ($2 = '' OR template_key = $2 OR ($2 = 'custom' AND template_key LIKE 'custom:%'))
+          AND ($3 = '' OR status = $3)`,
+      [search, templateKey, status],
+    );
+    await pool.query("INSERT INTO audit_logs (admin_id, action, details) VALUES ($1, $2, $3)",
+      [req.admin.id, "email_log_deleted", `Deleted ${rowCount} email log entries`]);
+    res.json({ deleted: rowCount });
+  });
+
   app.post("/api/admin/classes/:classId/emails", requireAdmin, async (req: any, res) => {
     const classId = Number(req.params.classId);
     const studentIds = req.body?.studentIds;

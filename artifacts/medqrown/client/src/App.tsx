@@ -1,7 +1,7 @@
 import { Switch, Route, useLocation } from "wouter";
 import { useEffect } from "react";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider, useTheme } from "@/contexts/theme-context";
@@ -52,6 +52,17 @@ function DashboardRedirect({ to }: { to: string }) {
   return null;
 }
 
+/** Signed-out visitors to any /admin page are sent home, so the admin area isn't discoverable. */
+function AdminOnly({ component: Component }: { component: React.ComponentType<any> }) {
+  const [, setLocation] = useLocation();
+  const { data: admin, isLoading } = useQuery<any>({ queryKey: ["/api/admin/me"], retry: false });
+  useEffect(() => {
+    if (!isLoading && !admin) setLocation("/");
+  }, [admin, isLoading, setLocation]);
+  if (isLoading || !admin) return null;
+  return <Component />;
+}
+
 function StudentRoutes() {
   return (
     <StudentShell>
@@ -77,22 +88,26 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={LandingPage} />
+      {/* Share this to send people straight to the free demo. */}
+      <Route path="/demo" component={LandingPage} />
       <Route path="/portal" component={StudentLogin} />
-      <Route path="/admin" component={AdminLogin} />
-      <Route path="/admin/dashboard" component={AdminDashboard} />
-      <Route path="/admin/exams/:id" component={AdminExamDetail} />
-      <Route path="/admin/settings" component={AdminSettings} />
-      <Route path="/admin/classes" component={AdminClasses} />
-      <Route path="/admin/classes/:id" component={AdminClassDetail} />
-      <Route path="/admin/payments" component={AdminPayments} />
-      <Route path="/admin/waitlist" component={AdminWaitlist} />
-      <Route path="/admin/students" component={AdminStudents} />
-      <Route path="/admin/site" component={AdminSite} />
+      {/* Admin sign-in is deliberately not linked from public pages. */}
+      <Route path="/medmin" component={AdminLogin} />
+      <Route path="/admin/dashboard">{() => <AdminOnly component={AdminDashboard} />}</Route>
+      <Route path="/admin/exams/:id">{() => <AdminOnly component={AdminExamDetail} />}</Route>
+      <Route path="/admin/settings">{() => <AdminOnly component={AdminSettings} />}</Route>
+      <Route path="/admin/classes">{() => <AdminOnly component={AdminClasses} />}</Route>
+      <Route path="/admin/classes/:id">{() => <AdminOnly component={AdminClassDetail} />}</Route>
+      <Route path="/admin/payments">{() => <AdminOnly component={AdminPayments} />}</Route>
+      <Route path="/admin/waitlist">{() => <AdminOnly component={AdminWaitlist} />}</Route>
+      <Route path="/admin/students">{() => <AdminOnly component={AdminStudents} />}</Route>
+      <Route path="/admin/site">{() => <AdminOnly component={AdminSite} />}</Route>
       <Route path="/terms" component={TermsPage} />
       <Route path="/privacy" component={PrivacyPage} />
       <Route path="/faq" component={FaqPage} />
       <Route path="/institutions" component={FEATURES.institutions ? InstitutionsPage : () => <DashboardRedirect to="/" />} />
-      <Route path="/student/signup" component={FEATURES.publicSignup ? StudentSignup : () => <DashboardRedirect to="/portal" />} />
+      {/* Invite-only page: Google Form when registration is open, waitlist form when closed (no self-signup). */}
+      <Route path="/student/signup" component={StudentSignup} />
       <Route path="/student/verify" component={FEATURES.publicSignup ? StudentVerifyEmail : () => <DashboardRedirect to="/portal" />} />
       <Route path="/student/awaiting" component={FEATURES.publicSignup ? StudentAwaiting : () => <DashboardRedirect to="/portal" />} />
       <Route path="/student/forgot-password" component={StudentForgotPassword} />
@@ -101,6 +116,10 @@ function Router() {
       <Route path="/student/instructions" component={StudentInstructions} />
       <Route path="/student/exam" component={StudentExam} />
       <Route path="/student/exam-review" component={StudentExamReview} />
+      {/* Link used by "results released" notifications and push messages. */}
+      <Route path="/student/exams/:id/results">
+        {(params) => <DashboardRedirect to={`/student/exam-review?examId=${encodeURIComponent(params.id)}`} />}
+      </Route>
       <Route path="/student/self-tests/:id/run" component={FEATURES.studentSelfTests ? StudentSelfTestRun : () => <DashboardRedirect to="/student/dashboard" />} />
       <Route path="/student/self-tests/:id/results" component={FEATURES.studentSelfTests ? StudentSelfTestResults : () => <DashboardRedirect to="/student/dashboard" />} />
        <Route path="/student/live-rooms/share/:token" component={FEATURES.studentLiveRooms ? LiveQuizShare : () => <DashboardRedirect to="/student/dashboard" />} />
@@ -133,8 +152,9 @@ function ThemeToggle() {
   return (
     <button
       onClick={toggleTheme}
-      className="fixed top-3 right-20 sm:top-auto sm:right-5 sm:bottom-5 z-[9999] h-11 w-11 rounded-full shadow-xl border-2 border-primary/30 bg-card hover:bg-muted flex items-center justify-center transition-colors"
+      className="fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] sm:right-5 sm:bottom-5 z-[9999] h-11 w-11 rounded-full shadow-xl border-2 border-primary/30 bg-card hover:bg-muted flex items-center justify-center transition-colors"
       title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
     >
       {theme === "dark"
         ? <Sun className="w-5 h-5 text-primary" />

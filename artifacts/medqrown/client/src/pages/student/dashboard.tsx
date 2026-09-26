@@ -1,312 +1,232 @@
-import { useStage8Dashboard } from "@/hooks/use-stage8"; // Will create this from use-student-stage8
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Link } from "wouter";
+import { ArrowRight, AlertCircle, CalendarDays, Megaphone, PenLine, Sparkles, TrendingUp, Clock, ExternalLink } from "lucide-react";
+import { useStage8Dashboard } from "@/hooks/use-stage8";
+import { useStudentMe } from "@/hooks/use-student";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { BookOpen, ArrowRight, Activity, Clock, AlertCircle, Calendar, GraduationCap, Megaphone, Receipt } from "lucide-react";
-import { RenewMembershipDialog } from "@/components/student/renew-membership-dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { FEATURES } from "@/lib/feature-flags";
-import { useState, useEffect } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
+import { RenewMembershipDialog } from "@/components/student/renew-membership-dialog";
+import { OccurrenceRow, useNow, useStudentTimetable } from "@/components/student/timetable-bits";
+import { ScoreTrend } from "@/components/student/score-trend";
+import { formatNairobi, formatCalendarDate } from "@/lib/datetime";
 
-function UpcomingCountdown({ targetDate }: { targetDate: string }) {
-  const [timeLeft, setTimeLeft] = useState("");
-
+function Countdown({ target }: { target: string }) {
+  const [left, setLeft] = useState("");
   useEffect(() => {
-    const target = new Date(targetDate).getTime();
-    const interval = setInterval(() => {
-      const now = new Date().getTime();
-      const distance = target - now;
-      if (distance < 0) {
-        setTimeLeft("Starts soon");
-        clearInterval(interval);
-        return;
-      }
-      const days = Math.floor(distance / (1000 * 60 * 60 * 24));
-      const hours = Math.floor((distance % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-      const minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-      const seconds = Math.floor((distance % (1000 * 60)) / 1000);
-      if (days > 0) setTimeLeft(`${days}d ${hours}h`);
-      else if (hours > 0) setTimeLeft(`${hours}h ${minutes}m`);
-      else setTimeLeft(`${minutes}m ${seconds}s`);
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [targetDate]);
+    const tick = () => {
+      const ms = Date.parse(target) - Date.now();
+      if (ms <= 0) { setLeft("Open now"); return; }
+      const d = Math.floor(ms / 86400000), h = Math.floor(ms / 3600000) % 24, m = Math.floor(ms / 60000) % 60, s = Math.floor(ms / 1000) % 60;
+      setLeft(d > 0 ? `${d}d ${h}h ${m}m` : h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`);
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [target]);
+  return <span className="font-mono tabular-nums">{left}</span>;
+}
 
-  return <span className="font-mono">{timeLeft || "..."}</span>;
+function greeting(): string {
+  const hour = Number(new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Nairobi", hour: "numeric", hour12: false }).format(new Date()));
+  return hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
 }
 
 export default function StudentDashboard() {
   const { data: dashboard, isLoading } = useStage8Dashboard();
+  const { data: me } = useStudentMe();
+  const { data: timetable } = useStudentTimetable();
+  const { data: history } = useQuery<any[]>({ queryKey: ["/api/student/results/history"] });
+  const now = useNow();
 
   if (isLoading) {
     return (
       <div className="space-y-6">
-        <div className="space-y-2">
-          <Skeleton className="h-8 w-48" />
-          <Skeleton className="h-4 w-96" />
-        </div>
-        <div className="grid gap-6 md:grid-cols-2">
-          <Skeleton className="h-48 w-full" />
-          <Skeleton className="h-48 w-full" />
-          <Skeleton className="h-48 w-full" />
-          <Skeleton className="h-48 w-full" />
-        </div>
+        <Skeleton className="h-10 w-64" />
+        <div className="grid gap-4 md:grid-cols-2"><Skeleton className="h-44" /><Skeleton className="h-44" /><Skeleton className="h-44" /><Skeleton className="h-44" /></div>
       </div>
     );
   }
-
   if (!dashboard) {
     return (
       <div className="text-center py-12">
-        <h2 className="text-lg font-medium">Unable to load dashboard</h2>
-        <p className="text-muted-foreground">Please try refreshing the page.</p>
+        <h2 className="text-lg font-medium">We couldn't load your dashboard</h2>
+        <p className="text-muted-foreground">Check your connection and refresh the page.</p>
       </div>
     );
   }
 
-  const { membership, pendingPayment, nextExam, latestAnnouncement, recentResults } = dashboard;
+  const { membership, pendingPayment, nextExam, latestAnnouncement } = dashboard;
+  const firstName = (me?.name || "").trim().split(/\s+/)[0];
+  const nextSession = timetable?.upcoming?.[0];
+  const results = [...(history || [])].reverse(); // oldest → newest for the trend
+  const average = results.length ? Math.round(results.reduce((sum, r) => sum + Number(r.scorePercent), 0) / results.length) : null;
+  const latest = history?.[0];
+  const showRenew = membership && (membership.status !== "active" || (membership.daysRemaining ?? 0) <= 7);
+  const examOpen = nextExam && Date.parse(nextExam.opensAt) <= now;
+
+  const whatsNext = examOpen
+    ? `${nextExam.title} is open now — good luck!`
+    : nextSession
+      ? `Next up: ${nextSession.title}, ${formatNairobi(nextSession.startsAt)}.`
+      : nextExam
+        ? `Your next Mock CAT opens ${formatNairobi(nextExam.opensAt)}.`
+        : "Nothing scheduled right now — a great time to revise.";
 
   return (
-    <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Overview</h1>
-        <p className="text-muted-foreground mt-2">
-          Welcome back. Here's a snapshot of your account and studies.
-        </p>
+    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div data-tour="welcome">
+        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">{greeting()}{firstName ? `, ${firstName}` : ""} 👋</h1>
+        <p className="text-muted-foreground mt-1">{whatsNext}</p>
       </div>
 
       {membership?.status === "grace" && (
-        <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-900 rounded-lg p-4 flex items-start gap-3 mb-6">
-          <AlertCircle className="w-5 h-5 text-yellow-600 dark:text-yellow-500 mt-0.5" />
-          <div>
-            <h4 className="font-medium text-yellow-800 dark:text-yellow-400">Membership Grace Period</h4>
-            <p className="text-sm text-yellow-700 dark:text-yellow-300 mt-1">
-              Your membership is in its grace period and will fully expire on {membership.graceEndDate}. Please renew your membership to maintain access.
-            </p>
-          </div>
+        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-900 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+          <p className="text-sm text-amber-800 dark:text-amber-300 flex-1">
+            Your membership has ended. Renew by {formatCalendarDate(membership.graceEndDate)} to keep access.
+          </p>
+          <div className="sm:w-48"><RenewMembershipDialog /></div>
         </div>
       )}
-
       {membership?.status === "expired" && (
-        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900 rounded-lg p-4 flex items-start gap-3 mb-6">
-          <AlertCircle className="w-5 h-5 text-red-600 dark:text-red-500 mt-0.5" />
-          <div>
-            <h4 className="font-medium text-red-800 dark:text-red-400">Membership Expired</h4>
-            <p className="text-sm text-red-700 dark:text-red-300 mt-1">
-              Your membership expired on {membership.endDate}. Access to exams and new content is restricted.
-            </p>
-          </div>
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-900 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+          <AlertCircle className="w-5 h-5 text-red-600 shrink-0" />
+          <p className="text-sm text-red-800 dark:text-red-300 flex-1">
+            Your membership has expired, so exams are locked. Your past results are still here. Renew to jump back in.
+          </p>
+          <div className="sm:w-48"><RenewMembershipDialog /></div>
         </div>
       )}
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Calendar className="w-5 h-5 text-primary" /> My Membership
-            </CardTitle>
+      <div className="grid gap-4 md:grid-cols-2">
+        {/* Up next: class session */}
+        <Card className="border-primary/20" data-tour="next-session">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base"><CalendarDays className="w-5 h-5 text-primary" />Next class</CardTitle>
           </CardHeader>
-          <CardContent>
-            {membership ? (
-              <div className="space-y-4">
-                <div className="flex justify-between items-center border-b pb-3">
-                  <span className="text-muted-foreground text-sm">Status</span>
-                  <Badge variant={membership.status === "active" ? "default" : membership.status === "grace" ? "secondary" : "destructive"}>
-                    {membership.status.toUpperCase()}
-                  </Badge>
-                </div>
-                <div className="flex justify-between items-center border-b pb-3">
-                  <span className="text-muted-foreground text-sm">Valid Until</span>
-                  <span className="font-medium text-sm">{membership.endDate || "N/A"}</span>
-                </div>
-                <div className="flex justify-between items-center border-b pb-3">
-                  <span className="text-muted-foreground text-sm">Days Remaining</span>
-                  <span className="font-medium text-sm">{membership.daysRemaining ?? "0"} days</span>
-                </div>
-                <div className="pt-2">
-                  <RenewMembershipDialog />
-                </div>
-              </div>
+          <CardContent className="space-y-3">
+            {nextSession ? (
+              <>
+                <OccurrenceRow occ={nextSession} now={now} />
+                {timetable?.linksHidden && <p className="text-xs text-muted-foreground">Meeting links appear here while your membership is active.</p>}
+              </>
             ) : (
-              <div className="text-center py-6 text-muted-foreground text-sm">
-                No membership details found.
-              </div>
+              <p className="text-sm text-muted-foreground">Your timetable will appear here once your class schedule is published.</p>
             )}
+            <Link href="/student/my-class?tab=timetable">
+              <Button variant="ghost" size="sm" className="px-0 text-primary">Full timetable <ArrowRight className="w-4 h-4 ml-1" /></Button>
+            </Link>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Receipt className="w-5 h-5 text-primary" /> Pending Payment
-            </CardTitle>
+        {/* Up next: exam */}
+        <Card data-tour="next-exam">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base"><PenLine className="w-5 h-5 text-primary" />Next Mock CAT</CardTitle>
           </CardHeader>
-          <CardContent>
-            {pendingPayment ? (
-              <div className="space-y-4">
-                <div className="flex justify-between items-center border-b pb-3">
-                  <span className="text-muted-foreground text-sm">Code</span>
-                  <span className="font-medium text-sm font-mono">{pendingPayment.code}</span>
-                </div>
-                <div className="flex justify-between items-center border-b pb-3">
-                  <span className="text-muted-foreground text-sm">Plan</span>
-                  <span className="font-medium text-sm capitalize">{pendingPayment.plan}</span>
-                </div>
-                <div className="flex justify-between items-center border-b pb-3">
-                  <span className="text-muted-foreground text-sm">Amount</span>
-                  <span className="font-medium text-sm">${pendingPayment.amount}</span>
-                </div>
-                <div className="flex justify-between items-center border-b pb-3">
-                  <span className="text-muted-foreground text-sm">Date</span>
-                  <span className="font-medium text-sm">{new Date(pendingPayment.createdAt).toLocaleDateString()}</span>
-                </div>
-              </div>
-            ) : (
-              <div className="flex h-[150px] flex-col items-center justify-center text-center">
-                <Receipt className="h-10 w-10 text-muted-foreground/30 mb-4" />
-                <p className="text-sm font-medium">No pending payments</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  You have no pending payments awaiting review.
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="flex flex-col">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Clock className="h-5 w-5 text-primary" /> Next Exam
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex-1">
+          <CardContent className="space-y-3">
             {nextExam ? (
-              <div className="bg-primary/5 rounded-lg border border-primary/10 p-5 space-y-4">
+              <>
                 <div>
-                  <h3 className="font-semibold text-lg">{nextExam.title}</h3>
+                  <p className="font-medium">{nextExam.title}</p>
                   <p className="text-sm text-muted-foreground">{nextExam.className}</p>
                 </div>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <p className="text-muted-foreground text-xs mb-1">Opens</p>
-                    <p className="font-medium">{new Date(nextExam.opensAt).toLocaleString()}</p>
-                  </div>
-                  <div>
-                    <p className="text-muted-foreground text-xs mb-1">Closes</p>
-                    <p className="font-medium">{new Date(nextExam.closesAt).toLocaleString()}</p>
-                  </div>
+                <div className="rounded-xl bg-primary/5 border border-primary/10 p-3 text-center">
+                  <p className="text-xs text-muted-foreground">{examOpen ? `Closes ${formatNairobi(nextExam.closesAt)}` : `Opens ${formatNairobi(nextExam.opensAt)}`}</p>
+                  <p className="text-2xl font-bold text-primary mt-1">{examOpen ? "Open now" : <Countdown target={nextExam.opensAt} />}</p>
                 </div>
-                {nextExam.countdownSeconds > 0 ? (
-                  <div className="pt-2 flex items-center gap-2 text-primary font-medium">
-                    <Clock className="w-4 h-4" />
-                    <span>Starts in: <UpcomingCountdown targetDate={nextExam.opensAt} /></span>
-                  </div>
-                ) : (
-                  <div className="pt-2 flex items-center gap-2 text-green-600 font-medium">
-                    <Activity className="w-4 h-4" />
-                    <span>Currently Open</span>
-                  </div>
-                )}
-                <Button className="w-full mt-2" asChild>
-                  <Link href={`/student/my-class?classId=${nextExam.classId}`}>Go to Class</Link>
-                </Button>
-              </div>
+                <Link href="/student/my-class">
+                  <Button className="w-full" variant={examOpen ? "default" : "outline"}>{examOpen ? "Start exam" : "Go to class"} <ArrowRight className="w-4 h-4 ml-1" /></Button>
+                </Link>
+              </>
             ) : (
-              <div className="flex h-[200px] flex-col items-center justify-center text-center">
-                <Clock className="h-10 w-10 text-muted-foreground/30 mb-4" />
-                <p className="text-sm font-medium">No upcoming exams</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  You don't have any scheduled exams in your classes.
-                </p>
-              </div>
+              <p className="text-sm text-muted-foreground">No upcoming exams yet. Mock CATs usually open Saturdays at 8:00 pm.</p>
             )}
           </CardContent>
         </Card>
 
-        <Card className="flex flex-col">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Megaphone className="h-5 w-5 text-primary" /> Latest Announcement
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex-1">
-            {latestAnnouncement ? (
-              <div className="space-y-3">
-                <div className="flex justify-between items-start gap-4">
-                  <h3 className="font-semibold">{latestAnnouncement.title}</h3>
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(latestAnnouncement.createdAt).toLocaleDateString()}
-                  </span>
-                </div>
-                {latestAnnouncement.className && (
-                  <Badge variant="outline" className="mb-2">{latestAnnouncement.className}</Badge>
-                )}
-                <p className="text-sm text-muted-foreground line-clamp-4 whitespace-pre-wrap">
-                  {latestAnnouncement.message}
-                </p>
-                <Button variant="ghost" className="w-full mt-4" asChild>
-                  <Link href="/student/my-class">View all announcements</Link>
-                </Button>
-              </div>
-            ) : (
-              <div className="flex h-[200px] flex-col items-center justify-center text-center">
-                <Megaphone className="h-10 w-10 text-muted-foreground/30 mb-4" />
-                <p className="text-sm font-medium">No announcements</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Check back later for updates from your classes.
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card className="md:col-span-2">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <Activity className="h-5 w-5 text-primary" /> Recent Results
-            </CardTitle>
+        {/* Progress */}
+        <Card data-tour="progress">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base"><TrendingUp className="w-5 h-5 text-primary" />Your progress</CardTitle>
           </CardHeader>
           <CardContent>
-            {!recentResults || recentResults.length === 0 ? (
-              <div className="flex h-[150px] flex-col items-center justify-center text-center">
-                <Activity className="h-10 w-10 text-muted-foreground/30 mb-4" />
-                <p className="text-sm font-medium">No recent results</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Complete an exam to see your results here.
-                </p>
+            {results.length ? (
+              <div className="space-y-3">
+                <div className="flex items-end justify-between gap-3">
+                  <div>
+                    <p className="text-xs text-muted-foreground">Latest</p>
+                    <p className="text-sm font-medium truncate max-w-[180px]">{latest?.examTitle}</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-2xl font-bold text-primary">{latest?.scorePercent}%</p>
+                    <p className="text-xs text-muted-foreground">average {average}%</p>
+                  </div>
+                </div>
+                <ScoreTrend results={results} height={90} />
+                <Link href="/student/results"><Button variant="ghost" size="sm" className="px-0 text-primary">All results <ArrowRight className="w-4 h-4 ml-1" /></Button></Link>
               </div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-2">
-                {recentResults.map((result) => (
-                  <Link key={result.attemptId} href={`/student/results?examId=${result.examId}`}>
-                    <div className="flex items-center justify-between rounded-lg border p-4 transition-colors hover:bg-muted/50 cursor-pointer h-full">
-                      <div className="space-y-1 min-w-0 pr-4">
-                        <p className="text-sm font-medium leading-none truncate">{result.examTitle}</p>
-                        <p className="text-xs text-muted-foreground truncate">{result.className}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {new Date(result.submittedAt).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="ml-4 flex flex-col items-center justify-center shrink-0 w-14 h-14 rounded-full bg-primary/10 text-primary font-bold text-sm">
-                        {result.scorePercent}%
-                      </div>
-                    </div>
-                  </Link>
-                ))}
+              <div className="text-center py-4">
+                <Sparkles className="w-8 h-8 text-primary/60 mx-auto mb-2" />
+                <p className="text-sm text-muted-foreground">Your scores will chart here after your first Mock CAT.</p>
               </div>
             )}
-            {recentResults && recentResults.length > 0 && (
-              <div className="mt-6 flex justify-center">
-                <Button variant="outline" asChild>
-                  <Link href="/student/results">View all history</Link>
-                </Button>
-              </div>
+          </CardContent>
+        </Card>
+
+        {/* Membership */}
+        <Card data-tour="membership">
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base"><Clock className="w-5 h-5 text-primary" />Membership</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {membership ? (
+              <>
+                <div className="flex items-center justify-between">
+                  <Badge variant={membership.status === "active" ? "default" : membership.status === "grace" ? "secondary" : "destructive"} className="capitalize">
+                    {membership.status === "invited" ? "Starts soon" : membership.status}
+                  </Badge>
+                  <span className="text-sm text-muted-foreground">until {formatCalendarDate(membership.endDate)}</span>
+                </div>
+                {membership.status === "active" && (
+                  <p className="text-sm"><span className="text-2xl font-bold">{membership.daysRemaining}</span> day{membership.daysRemaining === 1 ? "" : "s"} left</p>
+                )}
+                {pendingPayment && (
+                  <p className="text-sm rounded-lg bg-muted p-2">Payment <span className="font-mono">{pendingPayment.code}</span> is being verified.</p>
+                )}
+                {showRenew && !pendingPayment && <RenewMembershipDialog />}
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">No membership yet. Contact us if you've paid.</p>
             )}
           </CardContent>
         </Card>
       </div>
+
+      {latestAnnouncement && (
+        <Card data-tour="announcement">
+          <CardContent className="p-4 flex items-start gap-3">
+            <div className="rounded-lg bg-primary/10 p-2 text-primary"><Megaphone className="w-4 h-4" /></div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2">
+                <p className="font-medium">{latestAnnouncement.title}</p>
+                <span className="text-xs text-muted-foreground">{formatNairobi(latestAnnouncement.createdAt)}</span>
+              </div>
+              <p className="text-sm text-muted-foreground mt-1 whitespace-pre-wrap line-clamp-3">{latestAnnouncement.message}</p>
+              {latestAnnouncement.link && (
+                <a href={latestAnnouncement.link} target="_blank" rel="noopener noreferrer" className="text-sm text-primary inline-flex items-center gap-1 mt-1">
+                  Open link <ExternalLink className="w-3 h-3" />
+                </a>
+              )}
+            </div>
+            <Link href="/student/my-class?tab=announcements"><Button variant="ghost" size="sm">All</Button></Link>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

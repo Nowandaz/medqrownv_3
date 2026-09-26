@@ -35,6 +35,7 @@ export interface Stage8DashboardData {
     message: string;
     createdAt: string;
     className?: string;
+    link?: string | null;
   } | null;
   recentResults: Array<{
     attemptId: number;
@@ -51,6 +52,7 @@ export interface Stage8DashboardData {
 export function useStage8Dashboard() {
   return useQuery<Stage8DashboardData>({
     queryKey: ["/api/student/dashboard"],
+    refetchOnMount: "always",
   });
 }
 
@@ -63,6 +65,7 @@ export function useStage8ResultsSummary() {
     passThreshold: number;
   }>({
     queryKey: ["/api/student/results/summary"],
+    refetchOnMount: "always",
   });
 }
 
@@ -78,6 +81,7 @@ export function useStage8ResultsHistory() {
     scorePercent: number;
   }>>({
     queryKey: ["/api/student/results/history"],
+    refetchOnMount: "always",
   });
 }
 
